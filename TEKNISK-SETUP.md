@@ -3,14 +3,14 @@
 Appen: https://tvillinganalys.vercel.app
 Vercel-projekt: `tvillinganalys` (team `team_TVRKbPHDZaAR0OC5etLKu3Il`, projekt-ID `prj_NXmuWF23ntHAu247bWaDz1UKvRxM`)
 
-Ingen GitHub-repo är kopplad än. Koden finns bara lokalt i den här sessionens arbetskatalog och deployas direkt till Vercel (se "Deploy" nedan). Om du vill köra från Claude Code: ladda ner filerna från den här sessionen, lägg dem i en mapp, kör `git init`, skapa en repo på GitHub och pusha. Därefter kan Claude Code jobba mot samma Vercel-projekt med samma deploy-metod, eller du kopplar Git-deploy i Vercel istället.
+Koden ligger i GitHub-repot `SimonUSL/Tvillinganalys`. Vercel-projektet ska kopplas till repot (Vercel → Settings → Git) så att varje push deployas automatiskt.
 
 ## Stack
 
 - Next.js 14 (App Router), TypeScript, inga externa npm-paket förutom React/Next.
 - Inget CRM, ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
 - Deploy: Vercel, utan Git — filerna skickas direkt i deploy-anropet (`create_deployment` med `files`-array, `encoding: utf-8`). Varje deploy måste skicka ALLA filer, inte bara ändrade — annars bryts bygget.
-- `projectSettings: { framework: "nextjs" }` måste skickas med i varje deploy. Vercel-projektets egen framework-inställning sparas inte (visar `null` i projektet), troligen pga behörighetsbegränsning på detta Vercel-konto/MCP-koppling.
+- `vercel.json` sätter `framework: nextjs`, så det behöver inte längre skickas med i varje deploy. Vercel-projektets egen framework-inställning sparas inte (visar `null` i projektet), troligen pga behörighetsbegränsning på detta Vercel-konto/MCP-koppling.
 
 ## Filstruktur
 
@@ -71,4 +71,3 @@ Varje rad i resultatet får en status. Vilken status som visas talar om var i ke
 1. Bekräfta att `TIC_API_KEY` är satt i Vercel och giltig.
 2. Kör en känd testsökning och läs av statuskolumnen enligt tabellen ovan.
 3. Om tic.io ger 0 träffar trots en bekräftat giltig nyckel: fältnamnen i `lib/twinfinder.ts` → `findTwins()` behöver justeras mot tic.io:s faktiska svar (kräver att man loggar/inspekterar ett riktigt svar från deras API).
-4. Koppla en GitHub-repo om arbetet ska fortsätta i Claude Code — se anteckning längst upp.
