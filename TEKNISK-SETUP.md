@@ -71,6 +71,21 @@ Görs när vi bekräftat att appen ska användas på riktiga kundlistor. Det kr�
 
 Alternativ till cache: en större tic.io-plan (200 anrop/mån är lite för det här användningsområdet).
 
+## Planerat: importera formulärexporter direkt ("inkorgen")
+
+Mål: ladda upp veckans råa formulärexporter från webbplatsen (boka demo, kontaktformulär, kontaktsida, offertförfrågan) i stället för en handgjord CSV. Testat 2026-10-07 på senaste veckans 17 förfrågningar (efter dubblettrensning):
+
+1. Koden läser alla fyra formaten, mappar kolumnerna (e-post- och meddelandefälten heter olika i varje export), slår ihop, tar bort dubbletter (samma e-post inom 10 min — samma förfrågan hamnar ofta i två formulär) och väljer datumintervall.
+2. Jev klassar varje förfrågan med Optimals erbjudande som kontext: typ (ny förfrågan / befintlig kund / säljer till Optimal / avregistrering / övrigt / oklart), avsändare (företag / förening / offentlig / privatperson) och om det är en mäklare. Klassningen stämde på alla 17 i testet.
+3. Bolaget identifieras: e-postdomänens stam söks hos bolagsdataapi (träffade ungefär hälften), annars tic.io-sökning på webbplats/e-post (`hyperlinks.hyperlink`, `emailAddresses.emailAddress`, 1 anrop, bara som reserv). Gratismejl: koden plockar ut namnkandidater ur meddelandet och Jev väljer. Inget säkert → "kontrollera manuellt".
+4. Bara nya förfrågningar från företag, föreningar och offentliga aktörer går vidare till tvillingsökningen. Privatpersoner, säljare, spam och oklara hoppas över med orsak. Mäklare är inte ett prioriterat segment för Optimal.
+
+Personuppgifter: e-postadresser och telefonnummer rensas ur meddelandet innan det skickas till Jev; bara e-postdomänen skickas.
+
+## Senare: befintliga kunder som tvillingkällor (separat projekt)
+
+Supportärendena i formulären (fel i order, inloggning, ändra tryckoriginal, blockera adress) avslöjar bolag som redan köper av Optimal. De är sannolikt de bästa källorna för tvillingar — deras tvillingar är nya prospekt av samma slag. Inkorgsimporten klassar dem redan som `befintlig_kund`; i dag hoppas de över. Att använda dem som källor är ett eget projekt, t.ex. en körning över hela historiken (5 000+ förfrågningar sedan 2019) — kräver en större tic.io-kvot eller cachen ovan.
+
 ## Kända begränsningar
 
 - tic.io:s filter släpper bara igenom bolag som har fältet: bolag utan omsättning hos tic.io kommer inte med i storleksfiltrerade sökningar.
