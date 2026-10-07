@@ -17,6 +17,7 @@ export interface ResultRow {
   kall_namn?: string;
   kall_sni?: string;
   kall_lan?: string | null;
+  kall_matchning?: string | null;
   geografi_relevant?: string;
   storlek_strikt?: string;
   sasongseffekt?: string;
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
   const bolagsdataKey = process.env.BOLAGSDATA_API_KEY;
   const ticKey = process.env.TIC_API_KEY;
   const foretagskontaktKey = process.env.FORETAGSKONTAKT_API_KEY;
+  const typesafeKey = process.env.TYPESAFE_API_KEY; // valfri: utan den tas första träffen
 
   if (!bolagsdataKey) {
     return NextResponse.json(
@@ -79,7 +81,7 @@ export async function POST(req: NextRequest) {
 
     let source: Company | null = null;
     try {
-      source = await resolveSourceCompany(companyName, bolagsdataKey);
+      source = await resolveSourceCompany(companyName, bolagsdataKey, typesafeKey);
     } catch (e: any) {
       rowsOut.push({
         lead_foretagsnamn: companyName,
@@ -97,6 +99,7 @@ export async function POST(req: NextRequest) {
         lead_foretagsnamn: companyName,
         kall_org_nr: source.org_nr,
         kall_namn: source.name,
+        kall_matchning: source.matchning,
         status: "ingen SNI-kod hittad",
       });
       continue;
@@ -108,6 +111,7 @@ export async function POST(req: NextRequest) {
       kall_namn: source.name,
       kall_sni: source.sni_codes.join(";"),
       kall_lan: source.lan,
+      kall_matchning: source.matchning,
       geografi_relevant: options.geografi_relevant ? "ja" : "nej",
       storlek_strikt: options.storlek_strikt ? "ja" : "nej",
       sasongseffekt: options.sasongseffekt,
