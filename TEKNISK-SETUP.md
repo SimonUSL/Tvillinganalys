@@ -10,11 +10,22 @@ Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas a
 - Ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
 - Funktionerna körs i Stockholm (`regions: ["arn1"]` i `vercel.json`) — tic.io tar bara emot anrop från SE/NO/DK/FI/DE.
 
+## Gränssnittet — tre steg
+
+1. **Underlag** (`app/ui/Underlag.tsx`): formulärexporter (dra in filerna, välj period) eller egen CSV-lista.
+2. **Granska** (`app/ui/Granska.tsx`): förfrågningarna i tre grupper — *Föreslås*, *Behöver bolag* (fyll i namn/org.nr eller godta Jevs osäkra förslag med ett klick) och *Hoppas över* (med orsak, går att ta med ändå). Åtgärdsfältet längst ned har taket för tic.io-anrop. Inget har sökts i det här steget.
+3. **Tvillingar** (`app/ui/Resultat.tsx`): förloppet strömmas från `/api/run` (NDJSON, ett bolag i taget) och resultaten visas per bolag med varför det valdes, hur tvillingarna togs fram och tvillingtabellen. Sammanfattning och CSV-nedladdning överst.
+
+Stilar och färger: `app/globals.css` (Optimals röd #EB5F62, Poppins).
+
 ## Filstruktur
 
 ```
 app/
-  page.tsx             — huvudsidan: klistra in CSV, kör sökning, se resultat, ladda ner CSV, logga ut
+  page.tsx             — stegflödet (underlag → granska → tvillingar)
+  ui/                  — stegens komponenter, typer och CSV-export
+  globals.css          — design (färger, knappar, kort, tabeller)
+  api/preview/route.ts — förhandsgranskning av formulärexporter (inga tic.io-anrop)
   layout.tsx           — global HTML-skal, laddar Poppins-fonten
   login/page.tsx       — inloggningssida
   api/run/route.ts     — tar emot CSV, kör hela flödet per lead, returnerar resultatrader

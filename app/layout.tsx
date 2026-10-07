@@ -1,3 +1,5 @@
+import "./globals.css";
+
 export const metadata = {
   title: "Tvillinganalys",
   description: "Tvillingbolag-sökning för Optimal Kommunikation",
@@ -14,14 +16,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body
-        style={{
-          fontFamily: "'Poppins', system-ui, sans-serif",
-          margin: 0,
-          background: "#F8F9FA",
-          color: "#64646A",
-        }}
-      >
+      <body>
         {children}
       </body>
     </html>

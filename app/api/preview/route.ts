@@ -17,6 +17,7 @@ export interface Forhandsrad {
   bolag_namn: string | null;
   bolag_org_nr: string | null;
   matchning: string;
+  forslag?: { namn: string; org_nr: string } | null; // osäkert förslag, godtas med ett klick
 }
 
 function datumText(d: Date): string {
@@ -65,6 +66,7 @@ export async function POST(req: NextRequest) {
           bolag_namn: r.company?.name ?? null,
           bolag_org_nr: r.company?.org_nr ?? null,
           matchning: r.matchning,
+          forslag: r.forslag ?? null,
         };
       } catch (e: any) {
         return { ...bas, typ: k.beskrivning, hoppa: null, bolag_namn: null, bolag_org_nr: null, matchning: `fel vid bolagssökning: ${e.message || e}` };

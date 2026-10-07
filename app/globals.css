@@ -1,0 +1,662 @@
+/* Tvillinganalys — Optimal Kommunikations färger och Poppins. */
+:root {
+  --accent: #eb5f62;
+  --accent-dark: #c9474a;
+  --accent-soft: #fdeced;
+  --ink: #2b2b2b;
+  --text: #4a4a50;
+  --muted: #74747a;
+  --line: #e3e5e9;
+  --line-soft: #eef0f3;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --ok: #1f7a4d;
+  --ok-soft: #e4f4ec;
+  --warn: #8a5a00;
+  --warn-soft: #fdf3dc;
+  --info: #2c5d8f;
+  --info-soft: #e6eef7;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.04), 0 4px 16px rgb(0 0 0 / 0.04);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Poppins", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+  accent-color: var(--accent);
+}
+
+h1,
+h2,
+h3 {
+  color: var(--ink);
+  line-height: 1.25;
+  margin: 0;
+}
+
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, white);
+  outline-offset: 2px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* --- Ramar --- */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 24px 8px;
+}
+.app-header img {
+  height: 30px;
+  display: block;
+}
+.app-main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 8px 24px 120px;
+}
+.title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin: 16px 0 20px;
+}
+.title-row h1 {
+  font-size: 26px;
+}
+.lead-text {
+  color: var(--muted);
+  margin: 4px 0 0;
+  max-width: 70ch;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+.stack > * + * {
+  margin-top: 16px;
+}
+
+/* --- Steg --- */
+.stepper {
+  display: flex;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: steg;
+}
+.stepper li {
+  counter-increment: steg;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.stepper li + li::before {
+  content: "";
+  width: 28px;
+  height: 1px;
+  background: var(--line);
+  margin-right: 4px;
+}
+.stepper li > span::before {
+  content: counter(steg);
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line);
+  margin-right: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  background: var(--card);
+}
+.stepper li[aria-current="step"] {
+  color: var(--ink);
+  font-weight: 600;
+}
+.stepper li[aria-current="step"] > span::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.stepper li.klar > span::before {
+  content: "✓";
+  background: var(--ink);
+  border-color: var(--ink);
+  color: white;
+}
+
+/* --- Knappar --- */
+.btn {
+  font: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  border-radius: 8px;
+  padding: 11px 20px;
+  min-height: 44px;
+  border: 2px solid var(--ink);
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+}
+.btn:hover {
+  background: var(--bg);
+}
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.btn-primary:hover {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+}
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn-link {
+  font: inherit;
+  font-size: 14px;
+  background: none;
+  border: none;
+  padding: 4px;
+  color: var(--muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* --- Formulär --- */
+.field {
+  display: grid;
+  gap: 6px;
+}
+.field > label,
+.field-label {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 14px;
+}
+.hint {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+input[type="text"],
+input[type="date"],
+input[type="number"],
+input:not([type]),
+textarea {
+  font: inherit;
+  font-size: 16px;
+  color: var(--ink);
+  border: 1px solid #c9ccd2;
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: white;
+}
+textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  width: 100%;
+  resize: vertical;
+}
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+}
+fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+legend {
+  padding: 0;
+}
+
+/* Val av underlag */
+.choice-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+.choice {
+  position: relative;
+  display: block;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px 16px 16px 48px;
+  cursor: pointer;
+  background: white;
+}
+.choice input {
+  position: absolute;
+  left: 16px;
+  top: 18px;
+}
+.choice strong {
+  color: var(--ink);
+  display: block;
+}
+.choice span {
+  font-size: 14px;
+  color: var(--muted);
+}
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Filuppladdning */
+.dropzone {
+  display: block;
+  border: 2px dashed #c9ccd2;
+  border-radius: var(--radius);
+  padding: 28px;
+  text-align: center;
+  cursor: pointer;
+  background: var(--bg);
+}
+.dropzone:hover,
+.dropzone.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.dropzone strong {
+  color: var(--ink);
+}
+.dropzone:has(input:focus-visible) {
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, white);
+}
+.file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+.file-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: white;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+}
+.chips-select {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* --- Märken --- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--line-soft);
+  color: var(--text);
+  white-space: nowrap;
+}
+.badge-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.badge-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.badge-info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+.badge-accent {
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+/* --- Sammanfattning --- */
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+}
+.summary div {
+  display: grid;
+}
+.summary dt {
+  font-size: 13px;
+  color: var(--muted);
+}
+.summary dd {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+/* --- Granskningslista --- */
+.group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 28px 0 10px;
+}
+.group-head h2 {
+  font-size: 17px;
+}
+details.group > summary {
+  cursor: pointer;
+  list-style: none;
+}
+details.group > summary::-webkit-details-marker {
+  display: none;
+}
+details.group > summary h2::before {
+  content: "▸ ";
+  color: var(--muted);
+}
+details.group[open] > summary h2::before {
+  content: "▾ ";
+}
+.review-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.review-item {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px 20px;
+  align-items: start;
+  background: white;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.review-item.av {
+  opacity: 0.72;
+}
+.review-item .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.review-item .msg {
+  margin: 6px 0 0;
+  font-size: 14px;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.review-item .msg.open {
+  -webkit-line-clamp: unset;
+}
+.company-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 8px;
+}
+.company-fields label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.company-fields input {
+  width: 100%;
+}
+.note {
+  grid-column: 2 / -1;
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+.note.warn {
+  color: var(--warn);
+}
+@media (max-width: 760px) {
+  .review-item {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+  .review-item .company {
+    grid-column: 2;
+  }
+}
+
+/* --- Åtgärdsfält --- */
+.action-bar {
+  position: sticky;
+  bottom: 0;
+  margin-top: 24px;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 -4px 20px rgb(0 0 0 / 0.06);
+  padding: 14px 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  align-items: center;
+  justify-content: space-between;
+}
+.action-bar .budget {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.action-bar .budget input {
+  width: 72px;
+}
+
+/* --- Förlopp --- */
+.progress-panel progress {
+  appearance: none;
+  width: 100%;
+  height: 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+.progress-panel progress::-webkit-progress-bar {
+  background: var(--line-soft);
+  border-radius: 999px;
+}
+.progress-panel progress::-webkit-progress-value {
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.progress-panel progress::-moz-progress-bar {
+  background: var(--accent);
+  border-radius: 999px;
+}
+.spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--line);
+  border-top-color: var(--accent);
+  animation: snurr 0.9s linear infinite;
+  display: inline-block;
+  vertical-align: -3px;
+}
+@keyframes snurr {
+  to {
+    transform: rotate(1turn);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* --- Resultat --- */
+.result-card {
+  background: white;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.result-card > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 16px 20px;
+  display: grid;
+  gap: 6px;
+}
+.result-card > summary::-webkit-details-marker {
+  display: none;
+}
+.result-card > summary h3 {
+  font-size: 17px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.result-card > summary h3::before {
+  content: "▸";
+  color: var(--muted);
+}
+.result-card[open] > summary h3::before {
+  content: "▾";
+}
+.result-card .chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.result-body {
+  padding: 0 20px 18px;
+}
+.table-wrap {
+  overflow-x: auto;
+}
+table.twins {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.twins th {
+  text-align: left;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+table.twins td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: top;
+}
+table.twins td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+table.twins .name {
+  color: var(--ink);
+  font-weight: 600;
+}
+table.twins .desc {
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 380px;
+}
+.empty-state {
+  padding: 4px 20px 18px;
+  color: var(--muted);
+  font-size: 14px;
+}
+.alert {
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+  font-size: 14px;
+}
+
+/* Etiketten runt filväljaren ska inte ärva fältetikettens fetstil. */
+.field > label.dropzone {
+  font-weight: 400;
+  color: var(--text);
+}
+.btn[aria-pressed="true"] {
+  background: var(--ink);
+  color: white;
+}
+table.twins .desc {
+  min-width: 260px;
+}
+@media (max-width: 760px) {
+  .action-bar .hint {
+    display: none;
+  }
+  .action-bar {
+    padding: 10px 12px;
+  }
+}

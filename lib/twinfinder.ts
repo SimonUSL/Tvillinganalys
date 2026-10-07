@@ -132,7 +132,7 @@ async function pickSourceHit(
   candidates: Record<string, any>[],
   typesafeKey: string | undefined,
   kontext?: LeadKontext
-): Promise<{ index: number | null; matchning: string }> {
+): Promise<{ index: number | null; matchning: string; forslag?: number }> {
   // Med kontext (sökterm gissad ur en förfrågan) kan även en ensam träff vara fel.
   if (candidates.length === 1 && !kontext) return { index: 0, matchning: "enda träffen" };
   if (!typesafeKey) return { index: 0, matchning: "första träffen (TYPESAFE_API_KEY saknas)" };
@@ -213,7 +213,7 @@ async function pickSourceHit(
     // "kontrollera manuellt") än ett osäkert bolag. Tallnäs matchades annars
     // mot en elfirma med "Tallner" i namnet.
     if (kontext && p < SAKER_MATCHNING) {
-      return { index: null, matchning: `osäker träff (Jev ${procent(p)}: ${candidates[best]?.name ?? "?"})` };
+      return { index: null, matchning: `osäker träff (Jev ${procent(p)}: ${candidates[best]?.name ?? "?"})`, forslag: best };
     }
     return {
       index: best,
@@ -230,6 +230,8 @@ export interface SourceResult {
   company: Company | null;
   matchning: string;
   ticSource?: TicSource;
+  // Osäkert förslag som användaren kan godta med ett klick i granskningen.
+  forslag?: { namn: string; org_nr: string };
 }
 
 const TIC_NAME_SEARCH_LIMIT = 10;
@@ -301,7 +303,7 @@ export async function resolveSourceCompany(
 ): Promise<SourceResult> {
   if (bolagsdataKey) {
     if (orgNr) {
-      const result = await bolagsdataDetails(normOrgNr(orgNr), bolagsdataKey, null, "org.nr från CSV");
+      const result = await bolagsdataDetails(normOrgNr(orgNr), bolagsdataKey, null, "angivet org.nr");
       if (result.company) return result;
     } else {
       const result = await resolveViaBolagsdata(companyName, bolagsdataKey, typesafeKey);
@@ -314,8 +316,8 @@ export async function resolveSourceCompany(
   if (orgNr) {
     const [doc] = await ticSearch(tic, { q: normOrgNr(orgNr), query_by: "registrationNumber", per_page: 1 });
     if (!doc) return { company: null, matchning: `hittade inget bolag med org.nr ${orgNr}` };
-    const company = companyFromTicDoc(doc, "org.nr från CSV");
-    return { company, matchning: "org.nr från CSV", ticSource: ticSourceFromDoc(doc, company) };
+    const company = companyFromTicDoc(doc, "angivet org.nr");
+    return { company, matchning: "angivet org.nr", ticSource: ticSourceFromDoc(doc, company) };
   }
   return resolveViaTic(companyName, tic, typesafeKey);
 }
@@ -378,8 +380,11 @@ export async function resolveViaBolagsdata(
   }
   if (!hits.length) return { company: null, matchning: "bolagsdataapi gav inga träffar på namnet" };
 
-  const { index, matchning } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey, kontext);
-  if (index === null) return { company: null, matchning };
+  const { index, matchning, forslag } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey, kontext);
+  if (index === null) {
+    const h = forslag !== undefined ? hits[forslag] : null;
+    return { company: null, matchning, ...(h ? { forslag: { namn: h.name, org_nr: normOrgNr(h.org_nr) } } : {}) };
+  }
   return bolagsdataDetails(hits[index].org_nr, bolagsdataKey, hits[index], matchning);
 }
 

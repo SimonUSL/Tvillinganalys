@@ -25,6 +25,8 @@ const INGEN_SASONG = new Set(["nej", "ingen", "-", "no", "none"]);
 export const maxDuration = 300;
 
 export interface ResultRow {
+  // Vilken granskad rad i gränssnittet resultatet hör till.
+  lead_id?: number;
   // Bara vid import av formulärexporter:
   forfragan_datum?: string;
   forfragan_formular?: string;
@@ -62,6 +64,23 @@ function datumText(d: Date): string {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+// Ett granskat lead som gränssnittet skickar.
+interface GranskatLead {
+  namn: string;
+  org_nr?: string;
+  geo?: string;
+  sasong?: string;
+  strikt?: string;
+  extra?: Partial<ResultRow>;
+}
+
+// Händelser i den strömmade körningen (NDJSON).
+export type Handelse =
+  | { typ: "lead"; index: number; totalt: number; namn: string; lead_id?: number }
+  | { typ: "rader"; rows: ResultRow[] }
+  | { typ: "klar"; tic_anrop: number; tic_fran_cache: number }
+  | { typ: "fel"; error: string };
 
 // Ett lead, oavsett om det kommer från en CSV eller en formulärförfrågan.
 interface LeadIn {
@@ -219,20 +238,55 @@ export async function POST(req: NextRequest) {
   const sedda = new Set<string>();
 
   if (Array.isArray(body.leads)) {
-    // --- Granskade leads från förhandsgranskningen av formulärexporter.
-    for (const lead of body.leads as { namn: string; org_nr?: string; extra?: Partial<ResultRow> }[]) {
-      const namn = (lead.namn || "").trim();
-      const orgNr = (lead.org_nr || "").replace(/\D/g, "");
-      if (!namn && !orgNr) continue;
-      // Ett bolag med flera förfrågningar tvillingsöks en gång.
-      const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
-      if (sedda.has(nyckel)) {
-        rowsOut.push({ ...lead.extra, lead_foretagsnamn: namn || orgNr, status: "dublett: samma bolag finns tidigare i listan" });
-        continue;
+    // --- Granskade leads (formulärexporter eller CSV) från gränssnittet.
+    const leads = (body.leads as GranskatLead[]).filter((l) => (l.namn || "").trim() || (l.org_nr || "").trim());
+    const kor = async (skicka: (h: Handelse) => void) => {
+      for (let i = 0; i < leads.length; i++) {
+        const lead = leads[i];
+        const namn = (lead.namn || "").trim();
+        const orgNr = (lead.org_nr || "").replace(/\D/g, "");
+        skicka({ typ: "lead", index: i, totalt: leads.length, namn: namn || orgNr, lead_id: lead.extra?.lead_id });
+        let rader: ResultRow[];
+        // Ett bolag med flera förfrågningar tvillingsöks en gång.
+        const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
+        if (sedda.has(nyckel)) {
+          rader = [{ ...lead.extra, lead_foretagsnamn: namn || orgNr, status: "dublett: samma bolag finns tidigare i listan" }];
+        } else {
+          sedda.add(nyckel);
+          rader = await processLead(
+            { namn: namn || orgNr, orgNr, geo: lead.geo, sasong: lead.sasong, strikt: lead.strikt, extra: lead.extra },
+            ctx
+          );
+        }
+        skicka({ typ: "rader", rows: rader });
       }
-      sedda.add(nyckel);
-      rowsOut.push(...(await processLead({ namn: namn || orgNr, orgNr, extra: lead.extra }, ctx)));
+      const klar = { typ: "klar" as const, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar };
+      console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, ...klar }));
+      skicka(klar);
+    };
+
+    if (body.stream) {
+      // NDJSON: en händelse per rad, så att gränssnittet kan visa förloppet.
+      const enc = new TextEncoder();
+      const strom = new ReadableStream({
+        async start(controller) {
+          const skicka = (h: Handelse) => controller.enqueue(enc.encode(JSON.stringify(h) + "\n"));
+          try {
+            await kor(skicka);
+          } catch (e: any) {
+            skicka({ typ: "fel", error: String(e.message || e) });
+          }
+          controller.close();
+        },
+      });
+      return new Response(strom, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
     }
+    let klar: any = {};
+    await kor((h) => {
+      if (h.typ === "rader") rowsOut.push(...h.rows);
+      if (h.typ === "klar") klar = h;
+    });
+    return NextResponse.json({ rows: rowsOut, tic_anrop: klar.tic_anrop, tic_fran_cache: klar.tic_fran_cache });
   } else {
     // --- CSV med leads.
     const leads = parseCsv(body.csv || "");
