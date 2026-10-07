@@ -93,9 +93,18 @@ export async function resolveSourceCompany(
     limit: "5",
   })}`;
   const searchResp = await fetch(searchUrl, { headers: { "x-api-key": bolagsdataKey } });
-  if (!searchResp.ok) return null;
+  // Ett fel från API:et (fel nyckel, slut på kvot osv.) ska synas i statusen,
+  // inte se ut som att bolaget inte finns.
+  if (!searchResp.ok) {
+    throw new Error(`${searchResp.status}: ${(await searchResp.text()).slice(0, 200)}`);
+  }
   const searchData = await searchResp.json();
-  const hits: any[] = Array.isArray(searchData) ? searchData : searchData.results || searchData.data || [];
+  const hits: any[] | undefined = Array.isArray(searchData)
+    ? searchData
+    : searchData.results || searchData.companies || searchData.data || searchData.hits;
+  if (!Array.isArray(hits)) {
+    throw new Error(`okänt svarsformat, fält: ${Object.keys(searchData || {}).join(", ")}`);
+  }
   if (!hits.length) return null;
 
   const top = hits[0];
@@ -110,7 +119,8 @@ export async function resolveSourceCompany(
     // ignorera - vi har redan grunddata fran sokningen
   }
 
-  const sniFromDetails: string[] = (details.sni_codes || [])
+  // Enligt docs ligger SNI-koderna i "sni", äldre svar använde "sni_codes".
+  const sniFromDetails: string[] = (details.sni || details.sni_codes || [])
     .map((c: any) => c.sni_code)
     .filter(Boolean);
   const sniCodes = sniFromDetails.length ? sniFromDetails : [top.sni_code].filter(Boolean);
