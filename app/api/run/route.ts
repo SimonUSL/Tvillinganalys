@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   Company,
   LeadOptions,
+  Twin,
   arJa,
   enrichContact,
   findTwins,
@@ -28,6 +29,9 @@ export interface ResultRow {
   tvilling_sni?: string;
   tvilling_lan?: string | null;
   tvilling_ort?: string | null;
+  tvilling_likhet?: string | null;
+  tvilling_poang?: number | null;
+  tvilling_verksamhet?: string | null;
   kontakt_namn?: string | null;
   kontakt_mejl?: string | null;
   kontakt_telefon?: string | null;
@@ -117,11 +121,11 @@ export async function POST(req: NextRequest) {
       sasongseffekt: options.sasongseffekt,
     };
 
-    let twins: Company[] = [];
+    let twins: Twin[] = [];
     try {
-      twins = await findTwins(source, options, ticKey, knownCustomerOrgNrs);
+      twins = await findTwins(source, options, ticKey, knownCustomerOrgNrs, typesafeKey);
     } catch (e: any) {
-      rowsOut.push({ ...gemensam, status: `fel vid tic.io-sökning: ${e.message || e}` });
+      rowsOut.push({ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` });
       continue;
     }
 
@@ -143,6 +147,9 @@ export async function POST(req: NextRequest) {
         tvilling_sni: (twin.sni_codes || []).join(";"),
         tvilling_lan: twin.lan ?? null,
         tvilling_ort: twin.ort ?? null,
+        tvilling_likhet: twin.likhet ?? null,
+        tvilling_poang: twin.poang ?? null,
+        tvilling_verksamhet: twin.verksamhet ?? null,
         kontakt_namn: twin.contact_name ?? null,
         kontakt_mejl: twin.contact_email ?? null,
         kontakt_telefon: twin.contact_phone ?? null,

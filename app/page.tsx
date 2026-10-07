@@ -14,12 +14,15 @@ const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
   { key: "kall_matchning", label: "Matchning" },
   { key: "tvilling_namn", label: "Tvilling" },
   { key: "tvilling_org_nr", label: "Tvilling org.nr" },
+  { key: "tvilling_likhet", label: "Likhet" },
+  { key: "tvilling_poang", label: "Poäng" },
   { key: "tvilling_anstallda", label: "Anställda" },
   { key: "tvilling_lan", label: "Län" },
   { key: "kontakt_namn", label: "Kontakt" },
   { key: "kontakt_mejl", label: "Mejl" },
   { key: "kontakt_telefon", label: "Telefon" },
   { key: "sasongseffekt", label: "Säsong" },
+  { key: "tvilling_verksamhet", label: "Verksamhet" },
   { key: "status", label: "Status" },
 ];
 
@@ -210,11 +213,23 @@ export default function Home() {
               <tbody>
                 {rows.map((row, i) => (
                   <tr key={i} style={{ borderBottom: `1px solid ${BORDER}` }}>
-                    {KOLUMNER.map((c) => (
-                      <td key={c.key as string} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
-                        {(row as any)[c.key] ?? ""}
-                      </td>
-                    ))}
+                    {KOLUMNER.map((c) => {
+                      const value = (row as any)[c.key] ?? "";
+                      // Verksamhetsbeskrivningen kan vara lång - korta i tabellen, hela texten i CSV:n.
+                      if (c.key === "tvilling_verksamhet") {
+                        const text = String(value);
+                        return (
+                          <td key={c.key as string} title={text} style={{ padding: "8px 10px", minWidth: 280 }}>
+                            {text.length > 140 ? `${text.slice(0, 140)}…` : text}
+                          </td>
+                        );
+                      }
+                      return (
+                        <td key={c.key as string} style={{ padding: "8px 10px", whiteSpace: "nowrap" }}>
+                          {value}
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>

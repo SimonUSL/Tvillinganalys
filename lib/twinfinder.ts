@@ -1,8 +1,8 @@
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
 //
 // Steg 2: bolagsdataapi.se (testat och fungerande sedan tidigare)
-// Steg 3-4: tic.io (SNI, omsättning och anställda filtreras hos tic.io,
-//           geografi filtreras här i koden)
+// Steg 3-4: tic.io hämtar kandidater brett, TypeSafe Jev bedömer hur lika
+//           de är kallbolaget, koden väger ihop med storlek (se findTwins)
 // Steg 5: foretagskontakt.se (fortfarande OBEKRÄFTAD - kör bara om nyckel
 //           finns, och misslyckas tyst/markeras i resultatet annars)
 
@@ -33,8 +33,6 @@ export function arJa(varde: string | undefined | null): boolean {
   return !!varde && JA_VARDEN.has(varde.trim().toLowerCase());
 }
 
-export const REVENUE_TOLERANCE = 0.4;
-export const EMPLOYEE_TOLERANCE = 0.5;
 export const STRICT_REVENUE_TOLERANCE = 0.2;
 export const STRICT_EMPLOYEE_TOLERANCE = 0.25;
 
@@ -245,71 +243,285 @@ export async function resolveSourceCompany(
   };
 }
 
+// --- Steg 3-4: hitta och ranka tvillingar ---------------------------------
+//
+// 1. Kallbolagets profil hämtas från tic.io (verksamhetsbeskrivning m.m.).
+// 2. Kandidater hämtas brett: samma SNI-koder + bolag med liknande
+//    verksamhetsbeskrivning, inom ett vidare storleksintervall än förut.
+// 3. Jev bedömer varje kandidat mot kallbolaget (en request per kandidat):
+//    hur lik verksamheten är, om den saknar egen verksamhet (holding o.d.),
+//    om den hör till samma koncern, och ev. om säsongen stämmer.
+// 4. Koden väger ihop Jevs likhet med hur nära i storlek bolaget är.
+
+// Brett sökintervall: en tredjedel till tre gånger kallbolagets storlek.
+const WIDE_SIZE_FACTOR = 3;
+const PURPOSE_QUERY_CHARS = 200;
+const JEV_CONCURRENCY = 20;
+// Likhet 0-3 från Jev. Under 1.5 lutar det mot "annan typ av verksamhet".
+export const MIN_LIKHET = 1.5;
+// Över dessa sannolikheter sorteras kandidaten bort.
+const MAX_UTAN_VERKSAMHET = 0.5;
+const MAX_SAMMA_KONCERN = 0.5;
+// Vikter i totalpoängen (skalas till 0-1).
+const VIKT_LIKHET = 0.75;
+const VIKT_STORLEK = 0.25;
+const VIKT_SASONG = 0.1;
+
+const LIKHET_NIVAER = ["annan bransch", "samma sektor", "samma bransch", "direkt konkurrent"];
+
+export interface Twin extends Company {
+  verksamhet?: string | null;
+  likhet?: string | null;
+  poang?: number | null;
+}
+
+interface TicProfile {
+  name: string;
+  business_description: string | null;
+  industry: string[];
+  legal_form: string | null;
+  employees: number | null;
+  website: string | null;
+  municipality: string | null;
+  owned_through: string[];
+}
+
+function ticProfile(doc: any): TicProfile {
+  const sni: any[] = docGet(doc, "sniCodes") || [];
+  const owners: any[] = docGet(doc, "currentBeneficialOwners") || [];
+  return {
+    name: docGet(doc, "names[0].nameOrIdentifier", "name") || "",
+    business_description: (docGet(doc, "mostRecentPurpose") || "").slice(0, 600) || null,
+    industry: sni.map((c) => c.sni_2007Name || c.sni_2025Name).filter(Boolean),
+    legal_form: docGet(doc, "legalEntityType"),
+    employees: docGet(doc, "mostRecentFinancialSummary.fn_NumberOfEmployees"),
+    website: docGet(doc, "hyperlinks[0].hyperlink"),
+    municipality: docGet(doc, "registeredOffices[0].municipality", "mostRecentRegisteredAddress.city"),
+    owned_through: Array.from(new Set(owners.map((o) => o.throughName).filter(Boolean))) as string[],
+  };
+}
+
+async function ticSearch(ticKey: string, body: Record<string, any>): Promise<any[]> {
+  const resp = await fetch(TIC_SEARCH_URL, {
+    method: "POST",
+    headers: { "x-api-key": ticKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ per_page: TIC_MAX_PER_PAGE, page: 1, ...body }),
+  });
+  if (!resp.ok) {
+    throw new Error(`tic.io-sokning misslyckades (${resp.status}): ${(await resp.text()).slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  return (data.hits || data.results || []).map((hit: any) => hit.document || hit);
+}
+
+function range(field: string, min: number, max: number): string {
+  return `${field}:[${Math.max(0, Math.floor(min))}..${Math.ceil(max)}]`;
+}
+
+// 1 = samma storlek, 0 = WIDE_SIZE_FACTOR gånger större/mindre eller mer.
+function sizeCloseness(source: Company, cand: Company): number | null {
+  const parts: number[] = [];
+  for (const [a, b] of [
+    [source.employees, cand.employees],
+    [source.net_revenue, cand.net_revenue],
+  ]) {
+    if (a && b && a > 0 && b > 0) {
+      parts.push(Math.max(0, 1 - Math.abs(Math.log(b / a)) / Math.log(WIDE_SIZE_FACTOR)));
+    }
+  }
+  return parts.length ? parts.reduce((x, y) => x + y, 0) / parts.length : null;
+}
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    })
+  );
+  return out;
+}
+
+interface JevBedomning {
+  likhet: number;
+  utan_verksamhet: number;
+  samma_koncern: number;
+  sasong: number | null;
+}
+
+async function judgeCandidate(
+  source: TicProfile,
+  candidate: TicProfile,
+  season: string,
+  typesafeKey: string
+): Promise<JevBedomning> {
+  const questions: Record<string, any> = {
+    likhet: {
+      type: "score",
+      instructions: {
+        question:
+          "How similar is the business of `candidate` to the business of `source`? Compare what they " +
+          "actually do and sell, and to whom, using `business_description`, `industry` and `name`.",
+        note: "Ignore company size and location; those are compared separately.",
+      },
+      criteria: [
+        "Different industry: `candidate` does something clearly different from `source`, e.g. a gym chain compared with a ski resort operator, or a software consultancy compared with an accounting firm.",
+        "Same broad sector but a different kind of business, e.g. a sports retailer or travel agency compared with a ski resort operator.",
+        "Same industry but a noticeably different offering or business model, e.g. a golf course or amusement park operator compared with a ski resort operator.",
+        "Direct peer: essentially the same kind of business as `source`, e.g. another ski resort operator compared with a ski resort operator, or another accounting firm compared with an accounting firm.",
+      ],
+    },
+    utan_verksamhet: {
+      type: "noul",
+      instructions:
+        "Is `candidate` a holding company, a dormant company, or another entity that mainly exists to own " +
+        "shares in other companies rather than running an operating business of its own?",
+      criteria: {
+        true: "`candidate` has no operating business of its own (holding, dormant, shelf company).",
+        false: "`candidate` runs an operating business that sells products or services.",
+      },
+    },
+    samma_koncern: {
+      type: "noul",
+      instructions:
+        "Is `candidate` part of the same corporate group or brand as `source`, for example its subsidiary, " +
+        "parent or sister company? Signs are a shared distinctive brand name in `name`, or `owned_through` naming `source`.",
+      criteria: {
+        true: "`candidate` belongs to the same group or brand as `source`.",
+        false: "`candidate` is an independent company, such as a competitor.",
+      },
+    },
+  };
+  if (season) {
+    questions.sasong = {
+      type: "noul",
+      instructions:
+        "Does the business of `candidate` likely have a strong seasonal peak in demand around `season`, " +
+        "like `source` has?",
+    };
+  }
+
+  const resp = await fetch(TYPESAFE_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${typesafeKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "jev-latest",
+      state: season ? { source, candidate, season } : { source, candidate },
+      questions,
+    }),
+  });
+  if (!resp.ok) throw new Error(`Jev ${resp.status}: ${(await resp.text()).slice(0, 120)}`);
+  const a = (await resp.json()).answers;
+  return {
+    likhet: a.likhet.score,
+    utan_verksamhet: a.utan_verksamhet.noul,
+    samma_koncern: a.samma_koncern.noul,
+    sasong: a.sasong ? a.sasong.noul : null,
+  };
+}
+
 export async function findTwins(
   source: Company,
   options: LeadOptions,
   ticKey: string,
   excludeOrgNrs: Set<string>,
-  debugSink?: (doc: any) => void
-): Promise<Company[]> {
-  const revenueTol = options.storlek_strikt ? STRICT_REVENUE_TOLERANCE : REVENUE_TOLERANCE;
-  const employeeTol = options.storlek_strikt ? STRICT_EMPLOYEE_TOLERANCE : EMPLOYEE_TOLERANCE;
-
-  let empMin: number | null = null;
-  let empMax: number | null = null;
-  if (source.employees) {
-    empMin = Math.max(0, Math.floor(source.employees * (1 - employeeTol)));
-    empMax = Math.floor(source.employees * (1 + employeeTol)) + 1;
-    const [, klassMin, klassMax] = storleksklass(source.employees);
-    empMin = Math.max(empMin, klassMin);
-    if (klassMax !== null) empMax = Math.min(empMax, klassMax);
-  }
-
-  // Fältnamn enligt docs.tic.io/api-lens/search. Omsättning är i tusental kr
-  // hos tic.io (rs_NetSalesK) men i kronor hos bolagsdataapi.
-  const filters: string[] = [];
-  if (source.sni_codes?.length) {
-    filters.push(`sniCodes.sni_2007Code:[${source.sni_codes.join(",")}]`);
-  }
-  if (source.net_revenue) {
-    const revK = source.net_revenue / 1000;
-    const revMin = Math.floor(revK * (1 - revenueTol));
-    const revMax = Math.ceil(revK * (1 + revenueTol));
-    filters.push(`mostRecentFinancialSummary.rs_NetSalesK:[${revMin}..${revMax}]`);
-  }
-  if (empMin !== null && empMax !== null) {
-    filters.push(`mostRecentFinancialSummary.fn_NumberOfEmployees:[${empMin}..${empMax}]`);
-  }
-
-  const params = new URLSearchParams({
-    q: "*",
-    query_by: "registrationNumber",
-    filter_by: filters.join(" && "),
-    per_page: String(TIC_MAX_PER_PAGE),
-  });
-
-  const resp = await fetch(`${TIC_SEARCH_URL}?${params}`, {
-    headers: { "x-api-key": ticKey },
-  });
-  if (!resp.ok) {
-    throw new Error(`tic.io-sokning misslyckades (${resp.status}): ${await resp.text()}`);
-  }
-  const data = await resp.json();
-  const hits: any[] = data.hits || data.results || [];
+  typesafeKey?: string
+): Promise<Twin[]> {
   const sourceOrgNr = normOrgNr(source.org_nr);
 
-  const twins: Company[] = [];
-  for (const hit of hits) {
-    const doc = hit.document || hit;
-    if (debugSink && twins.length === 0) debugSink(doc);
+  // Kallbolagets egen post hos tic.io: verksamhetsbeskrivning och SNI 2007 + 2025.
+  const [sourceDoc] = await ticSearch(ticKey, {
+    q: sourceOrgNr,
+    query_by: "registrationNumber",
+    per_page: 1,
+  });
+  const sourceProfile: TicProfile = sourceDoc
+    ? ticProfile(sourceDoc)
+    : {
+        name: source.name,
+        business_description: null,
+        industry: [],
+        legal_form: null,
+        employees: source.employees ?? null,
+        website: null,
+        municipality: source.ort ?? null,
+        owned_through: [],
+      };
+  const sni2007 = new Set(source.sni_codes);
+  const sni2025 = new Set<string>();
+  for (const c of (sourceDoc && docGet(sourceDoc, "sniCodes")) || []) {
+    if (c.sni_2007Code) sni2007.add(c.sni_2007Code);
+    if (c.sni_2025Code) sni2025.add(c.sni_2025Code);
+  }
 
-    const candOrgNr = normOrgNr(docGet(doc, "registrationNumber", "org_nr"));
-    if (!candOrgNr || candOrgNr === sourceOrgNr || excludeOrgNrs.has(candOrgNr)) continue;
-
-    const candEmployees = docGet(doc, "mostRecentFinancialSummary.fn_NumberOfEmployees", "fn_NumberOfEmployees");
-    if (empMin !== null && empMax !== null && candEmployees !== null) {
-      if (!(empMin <= candEmployees && candEmployees <= empMax)) continue;
+  // Storleksfilter hos tic.io. Strikt läge behåller de snäva gränserna,
+  // annars ett brett intervall - rankingen sköter resten.
+  // Omsättning är i tusental kr hos tic.io (rs_NetSalesK) men i kronor hos bolagsdataapi.
+  const sizeFilters: string[] = [];
+  if (options.storlek_strikt) {
+    if (source.net_revenue) {
+      const revK = source.net_revenue / 1000;
+      sizeFilters.push(
+        range("mostRecentFinancialSummary.rs_NetSalesK", revK * (1 - STRICT_REVENUE_TOLERANCE), revK * (1 + STRICT_REVENUE_TOLERANCE))
+      );
     }
+    if (source.employees) {
+      const [, klassMin, klassMax] = storleksklass(source.employees);
+      const min = Math.max(klassMin, source.employees * (1 - STRICT_EMPLOYEE_TOLERANCE));
+      let max = source.employees * (1 + STRICT_EMPLOYEE_TOLERANCE) + 1;
+      if (klassMax !== null) max = Math.min(max, klassMax);
+      sizeFilters.push(range("mostRecentFinancialSummary.fn_NumberOfEmployees", min, max));
+    }
+  } else {
+    if (source.net_revenue) {
+      const revK = source.net_revenue / 1000;
+      sizeFilters.push(range("mostRecentFinancialSummary.rs_NetSalesK", revK / WIDE_SIZE_FACTOR, revK * WIDE_SIZE_FACTOR));
+    }
+    if (source.employees) {
+      sizeFilters.push(
+        range("mostRecentFinancialSummary.fn_NumberOfEmployees", source.employees / WIDE_SIZE_FACTOR, source.employees * WIDE_SIZE_FACTOR + 1)
+      );
+    }
+  }
+
+  const sniFilter = [
+    sni2007.size ? `sniCodes.sni_2007Code:[${Array.from(sni2007).join(",")}]` : null,
+    sni2025.size ? `sniCodes.sni_2025Code:[${Array.from(sni2025).join(",")}]` : null,
+  ].filter(Boolean);
+
+  // Två sökningar parallellt: samma SNI, och liknande verksamhetsbeskrivning
+  // (fångar bolag som registrerat sig under en annan SNI-kod).
+  const searches: Promise<any[]>[] = [];
+  if (sniFilter.length) {
+    searches.push(
+      ticSearch(ticKey, {
+        q: "*",
+        query_by: "registrationNumber",
+        filter_by: [`(${sniFilter.join(" || ")})`, ...sizeFilters].join(" && "),
+      })
+    );
+  }
+  if (sourceProfile.business_description) {
+    searches.push(
+      ticSearch(ticKey, {
+        q: sourceProfile.business_description.slice(0, PURPOSE_QUERY_CHARS),
+        query_by: "mostRecentPurpose",
+        ...(sizeFilters.length ? { filter_by: sizeFilters.join(" && ") } : {}),
+      }).catch(() => [] as any[]) // extra källa - får inte stoppa SNI-sökningen
+    );
+  }
+  const docs = (await Promise.all(searches)).flat();
+
+  const seen = new Set<string>();
+  const pool: { company: Twin; profile: TicProfile }[] = [];
+  for (const doc of docs) {
+    const candOrgNr = normOrgNr(docGet(doc, "registrationNumber", "org_nr"));
+    if (!candOrgNr || candOrgNr === sourceOrgNr || excludeOrgNrs.has(candOrgNr) || seen.has(candOrgNr)) continue;
+    seen.add(candOrgNr);
 
     const candLan = docGet(doc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county", "lan");
     if (options.geografi_relevant) {
@@ -318,25 +530,65 @@ export async function findTwins(
       }
     }
 
-    twins.push({
-      org_nr: candOrgNr,
-      name:
-        docGet(doc, "mostRecentName", "names[0].nameOrIdentifier", "names[0].legalName", "name") || "",
-      net_revenue: (() => {
-        const k = docGet(doc, "mostRecentFinancialSummary.rs_NetSalesK", "rs_NetSalesK");
-        return k === null ? null : k * 1000;
-      })(),
-      employees: candEmployees,
-      sni_codes: (docGet(doc, "sniCodes") || [])
-        .map((c: any) => (typeof c === "string" ? c : c.sni_2007Code))
-        .filter(Boolean),
-      lan: candLan,
-      ort: docGet(doc, "mostRecentRegisteredAddress.city", "ort"),
+    const profile = ticProfile(doc);
+    pool.push({
+      profile,
+      company: {
+        org_nr: candOrgNr,
+        name: profile.name,
+        net_revenue: (() => {
+          const k = docGet(doc, "mostRecentFinancialSummary.rs_NetSalesK", "rs_NetSalesK");
+          return k === null ? null : k * 1000;
+        })(),
+        employees: profile.employees,
+        sni_codes: (docGet(doc, "sniCodes") || [])
+          .map((c: any) => (typeof c === "string" ? c : c.sni_2007Code))
+          .filter(Boolean),
+        lan: candLan,
+        ort: docGet(doc, "mostRecentRegisteredAddress.city", "ort"),
+        verksamhet: profile.business_description,
+      },
     });
-    if (twins.length >= MAX_TWINS_PER_LEAD) break;
   }
 
-  return twins;
+  // Utan Jev: ranka bara på storlek (bättre än tic.io:s godtyckliga ordning).
+  if (!typesafeKey) {
+    for (const { company } of pool) {
+      company.poang = sizeCloseness(source, company) ?? 0;
+      company.likhet = "ej bedömd (TYPESAFE_API_KEY saknas)";
+    }
+    return pool
+      .map((p) => p.company)
+      .sort((a, b) => (b.poang ?? 0) - (a.poang ?? 0))
+      .slice(0, MAX_TWINS_PER_LEAD);
+  }
+
+  const season = options.sasongseffekt;
+  const judged = await mapLimit(pool, JEV_CONCURRENCY, async ({ company, profile }) => {
+    try {
+      return { company, jev: await judgeCandidate(sourceProfile, profile, season, typesafeKey) };
+    } catch {
+      return { company, jev: null };
+    }
+  });
+  if (pool.length && judged.every((j) => !j.jev)) {
+    throw new Error("Jev-bedömningen misslyckades för alla kandidater");
+  }
+
+  const twins: Twin[] = [];
+  for (const { company, jev } of judged) {
+    if (!jev) continue;
+    if (jev.utan_verksamhet > MAX_UTAN_VERKSAMHET || jev.samma_koncern > MAX_SAMMA_KONCERN) continue;
+    if (jev.likhet < MIN_LIKHET) continue;
+    const storlek = sizeCloseness(source, company) ?? 0.5;
+    const sasong = jev.sasong !== null ? VIKT_SASONG * jev.sasong : 0;
+    const maxPoang = 1 + (jev.sasong !== null ? VIKT_SASONG : 0);
+    company.poang =
+      Math.round(((VIKT_LIKHET * (jev.likhet / 3) + VIKT_STORLEK * storlek + sasong) / maxPoang) * 100) / 100;
+    company.likhet = `${LIKHET_NIVAER[Math.round(jev.likhet)]} (${jev.likhet.toFixed(1)}/3)`;
+    twins.push(company);
+  }
+  return twins.sort((a, b) => (b.poang ?? 0) - (a.poang ?? 0)).slice(0, MAX_TWINS_PER_LEAD);
 }
 
 export async function enrichContact(company: Company, foretagskontaktKey: string): Promise<void> {
