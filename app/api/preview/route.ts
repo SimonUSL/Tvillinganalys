@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { classifyInquiry, identifyCompany, parseFormExports, skalAttHoppaOver } from "@/lib/inkorg";
+import { classifyInquiry, identifyCompany, parseFormExports, skalAttHoppaOver, utanPersonuppgifter } from "@/lib/inkorg";
 
 // Förhandsgranskning av formulärexporter: klassning (Jev) och bolagsförslag
 // (bolagsdataapi). Inga tic.io-anrop - de görs först när användaren har
@@ -47,7 +47,8 @@ export async function POST(req: NextRequest) {
         datum: datumText(f.datum),
         formular: f.formular,
         doman: f.doman,
-        text: f.meddelande.replace(/\s+/g, " ").slice(0, 300),
+        // E-post och telefonnummer maskas även i gränssnittet - granskningen behöver dem inte.
+        text: utanPersonuppgifter(f.meddelande).replace(/\s+/g, " ").slice(0, 300),
       };
       let k;
       try {
