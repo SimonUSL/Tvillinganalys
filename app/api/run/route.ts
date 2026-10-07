@@ -50,12 +50,6 @@ export async function POST(req: NextRequest) {
   const foretagskontaktKey = process.env.FORETAGSKONTAKT_API_KEY;
   const typesafeKey = process.env.TYPESAFE_API_KEY; // valfri: utan den tas första träffen
 
-  if (!bolagsdataKey) {
-    return NextResponse.json(
-      { error: "Saknar BOLAGSDATA_API_KEY i Vercel-projektets Environment Variables." },
-      { status: 500 }
-    );
-  }
   if (!ticKey) {
     return NextResponse.json(
       { error: "Saknar TIC_API_KEY i Vercel-projektets Environment Variables." },
@@ -85,12 +79,20 @@ export async function POST(req: NextRequest) {
 
     let source: Company | null = null;
     let matchning = "";
+    let foundTicSource: TicSource | undefined;
     try {
-      ({ company: source, matchning } = await resolveSourceCompany(companyName, bolagsdataKey, typesafeKey));
+      const orgNrCell = (lead.org_nr || lead.orgnr || lead.organisationsnummer || "").trim();
+      ({ company: source, matchning, ticSource: foundTicSource } = await resolveSourceCompany(
+        companyName,
+        ticKey,
+        bolagsdataKey,
+        typesafeKey,
+        orgNrCell || undefined
+      ));
     } catch (e: any) {
       rowsOut.push({
         lead_foretagsnamn: companyName,
-        status: `fel vid bolagsdataapi-sökning: ${e.message || e}`,
+        status: `fel vid bolagssökning: ${e.message || e}`,
       });
       continue;
     }
@@ -121,7 +123,7 @@ export async function POST(req: NextRequest) {
 
     let ticSource: TicSource;
     try {
-      ticSource = await fetchTicSource(source, ticKey);
+      ticSource = foundTicSource ?? (await fetchTicSource(source, ticKey));
     } catch (e: any) {
       rowsOut.push({ ...gemensamGrund, status: `fel vid tic.io-sökning: ${e.message || e}` });
       continue;

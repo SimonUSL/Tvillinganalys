@@ -1,6 +1,6 @@
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
 //
-// Steg 2: bolagsdataapi.se (testat och fungerande sedan tidigare)
+// Steg 2: namnsökning hos tic.io, Jev väljer rätt träff (bolagsdataapi.se som reserv)
 // Steg 3-4: tic.io hämtar kandidater brett, TypeSafe Jev bedömer hur lika
 //           de är kallbolaget, koden väger ihop med storlek (se findTwins)
 // Steg 5: foretagskontakt.se (fortfarande OBEKRÄFTAD - kör bara om nyckel
@@ -62,9 +62,9 @@ const FORETAGSKONTAKT_URL =
   "https://www.xn--fretagskontakt-vpb.se/api/verifiera-foretagsuppgifter"; // OBEKRAFTAD
 const MAX_TWINS_PER_LEAD = 10;
 
-// Steg 2b: TypeSafe Jev väljer vilket av bolagsdataapi:s sökträffar leadet avser.
+// Steg 2b: TypeSafe Jev väljer vilken namnträff leadet avser.
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
-const SOURCE_SEARCH_LIMIT = 5; // 10 gav "ej hittat" på SkiStar - 5 är beprövat
+const SOURCE_SEARCH_LIMIT = 5; // bolagsdataapi (reserv)
 // Under denna sannolikhet används Jevs val ändå, men markeras som osäkert.
 export const SAKER_MATCHNING = 0.7;
 // Jev måste vara så här säker på "ingen" för att leadet ska räknas som ej hittat.
@@ -113,13 +113,12 @@ const procent = (p: number) => `${Math.round(p * 100)} %`;
 // faller vi tillbaka på första träffen (det gamla beteendet) och säger det.
 async function pickSourceHit(
   companyName: string,
-  hits: any[],
+  candidates: Record<string, any>[],
   typesafeKey: string | undefined
 ): Promise<{ index: number | null; matchning: string }> {
-  if (hits.length === 1) return { index: 0, matchning: "enda träffen" };
+  if (candidates.length === 1) return { index: 0, matchning: "enda träffen" };
   if (!typesafeKey) return { index: 0, matchning: "första träffen (TYPESAFE_API_KEY saknas)" };
 
-  const candidates = hits.map(candidateSummary);
   const criteria: Record<string, string> = {};
   candidates.forEach((c, i) => {
     const ort = c.ort ? `, ${c.ort}` : "";
@@ -143,6 +142,7 @@ async function pickSourceHit(
                 "`candidates` are search results from the Swedish company register. " +
                 "Which candidate is the company they most likely mean?",
               guidance: [
+                "A subsidiary, property company or holding company that only shares the brand is not the same company as the group's main company named in `lead_name`.",
                 "Prefer the candidate whose name matches `lead_name` most closely, ignoring legal-form suffixes such as AB, (publ), HB, KB and differences in case, spacing or punctuation.",
                 "The lead is a business customer: prefer an active operating company over one that is dissolved, bankrupt, in liquidation or deregistered, and over housing cooperatives (bostadsrättsförening), non-profit associations, foundations or clubs that merely share the name.",
                 "If both an operating company and its holding or parent company match, prefer the one with actual operations (revenue, employees).",
@@ -192,12 +192,78 @@ async function pickSourceHit(
 }
 
 // company är null när leadet inte kunde knytas till ett bolag; matchning säger varför.
+// ticSource finns när bolaget hittades via tic.io (sparar ett anrop i steg 3).
 export interface SourceResult {
   company: Company | null;
   matchning: string;
+  ticSource?: TicSource;
 }
 
+const TIC_NAME_SEARCH_LIMIT = 10;
+
+function companyFromTicDoc(doc: any, matchning: string): Company {
+  const k = docGet(doc, "mostRecentFinancialSummary.rs_NetSalesK");
+  return {
+    org_nr: normOrgNr(docGet(doc, "registrationNumber")),
+    name: docGet(doc, "names[0].nameOrIdentifier") || "",
+    net_revenue: k === null ? null : k * 1000, // tic.io anger tusental kr
+    employees: docGet(doc, "mostRecentFinancialSummary.fn_NumberOfEmployees"),
+    sni_codes: (docGet(doc, "sniCodes") || []).map((c: any) => c.sni_2007Code).filter(Boolean),
+    lan: docGet(doc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county"),
+    ort: docGet(doc, "mostRecentRegisteredAddress.city", "registeredOffices[0].municipality"),
+    matchning,
+  };
+}
+
+// Det Jev får se om varje namnträff från tic.io.
+function ticCandidateSummary(doc: any): Record<string, any> {
+  const p = ticProfile(doc);
+  return {
+    name: p.name,
+    org_nr: normOrgNr(docGet(doc, "registrationNumber")),
+    ort: p.municipality,
+    legal_form: p.legal_form,
+    employees: p.employees,
+    industry: p.industry,
+    business_description: p.business_description ? p.business_description.slice(0, 200) : null,
+  };
+}
+
+// Steg 2: knyt leadet till ett bolag. Org.nr från CSV:n slås upp direkt.
+// Annars namnsökning hos tic.io (rankar namnträffar bättre än bolagsdataapi,
+// som t.ex. bara gav SkiStars dotterbolag för "SkiStar AB") och Jev väljer.
+// bolagsdataapi används bara om tic.io inte hittar något.
 export async function resolveSourceCompany(
+  companyName: string,
+  ticKey: string,
+  bolagsdataKey: string | undefined,
+  typesafeKey?: string,
+  orgNr?: string
+): Promise<SourceResult> {
+  if (orgNr) {
+    const [doc] = await ticSearch(ticKey, { q: normOrgNr(orgNr), query_by: "registrationNumber", per_page: 1 });
+    if (!doc) return { company: null, matchning: `tic.io hittade inget bolag med org.nr ${orgNr}` };
+    const company = companyFromTicDoc(doc, "org.nr från CSV");
+    return { company, matchning: "org.nr från CSV", ticSource: ticSourceFromDoc(doc, company) };
+  }
+
+  const docs = await ticSearch(ticKey, {
+    q: companyName,
+    query_by: "names.nameOrIdentifier",
+    per_page: TIC_NAME_SEARCH_LIMIT,
+  });
+  if (docs.length) {
+    const { index, matchning } = await pickSourceHit(companyName, docs.map(ticCandidateSummary), typesafeKey);
+    if (index === null) return { company: null, matchning };
+    const company = companyFromTicDoc(docs[index], matchning);
+    return { company, matchning, ticSource: ticSourceFromDoc(docs[index], company) };
+  }
+
+  if (!bolagsdataKey) return { company: null, matchning: "tic.io gav inga träffar på namnet" };
+  return resolveViaBolagsdata(companyName, bolagsdataKey, typesafeKey);
+}
+
+async function resolveViaBolagsdata(
   companyName: string,
   bolagsdataKey: string,
   typesafeKey?: string
@@ -219,9 +285,9 @@ export async function resolveSourceCompany(
   if (!Array.isArray(hits)) {
     throw new Error(`okänt svarsformat, fält: ${Object.keys(searchData || {}).join(", ")}`);
   }
-  if (!hits.length) return { company: null, matchning: "bolagsdataapi gav inga träffar på namnet" };
+  if (!hits.length) return { company: null, matchning: "varken tic.io eller bolagsdataapi gav träffar på namnet" };
 
-  const { index, matchning } = await pickSourceHit(companyName, hits, typesafeKey);
+  const { index, matchning } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey);
   if (index === null) return { company: null, matchning };
   const top = hits[index];
   const orgNr = top.org_nr;
@@ -449,6 +515,10 @@ export async function fetchTicSource(source: Company, ticKey: string): Promise<T
     query_by: "registrationNumber",
     per_page: 1,
   });
+  return ticSourceFromDoc(sourceDoc, source);
+}
+
+function ticSourceFromDoc(sourceDoc: any, source: Company): TicSource {
   const profile: TicProfile = sourceDoc
     ? ticProfile(sourceDoc)
     : {

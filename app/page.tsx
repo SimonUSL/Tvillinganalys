@@ -125,7 +125,7 @@ export default function Home() {
           Tvillinganalys
         </h1>
         <p style={{ color: "#64646A", marginTop: 0, marginBottom: 24, fontSize: 14 }}>
-          Klistra in leads.csv nedan och kör sökningen. Bara foretagsnamn krävs. Lämnar du
+          Klistra in leads.csv nedan och kör sökningen. Bara foretagsnamn krävs (lägg gärna till kolumnen org_nr för bolag med många namnlika träffar). Lämnar du
           geografi_relevant eller sasongseffekt tomma gissar Jev dem utifrån bolagets
           verksamhet; ifyllda värden gäller alltid (skriv &quot;ingen&quot; för ingen säsong).
         </p>
