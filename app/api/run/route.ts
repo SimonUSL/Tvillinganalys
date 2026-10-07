@@ -25,6 +25,7 @@ export interface ResultRow {
   kall_sni?: string;
   kall_lan?: string | null;
   kall_matchning?: string | null;
+  urval?: string | null;
   geografi_relevant?: string;
   storlek_strikt?: string;
   sasongseffekt?: string;
@@ -164,15 +165,16 @@ export async function POST(req: NextRequest) {
     };
 
     let twins: Twin[] = [];
+    let urval = "";
     try {
-      twins = await findTwins(source, ticSource, options, ticKey, knownCustomerOrgNrs, typesafeKey);
+      ({ twins, urval } = await findTwins(source, ticSource, options, ticKey, knownCustomerOrgNrs, typesafeKey));
     } catch (e: any) {
       rowsOut.push({ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` });
       continue;
     }
 
     if (!twins.length) {
-      rowsOut.push({ ...gemensam, status: "inga tvillingar hittade" });
+      rowsOut.push({ ...gemensam, urval, status: "inga tvillingar hittade" });
       continue;
     }
 
@@ -182,6 +184,7 @@ export async function POST(req: NextRequest) {
       }
       rowsOut.push({
         ...gemensam,
+        urval,
         tvilling_org_nr: twin.org_nr,
         tvilling_namn: twin.name,
         tvilling_oms: twin.net_revenue ?? null,

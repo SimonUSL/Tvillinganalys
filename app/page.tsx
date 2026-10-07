@@ -13,6 +13,7 @@ const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
   { key: "kall_namn", label: "Kallbolag" },
   { key: "kall_org_nr", label: "Kall org.nr" },
   { key: "kall_matchning", label: "Matchning" },
+  { key: "urval", label: "Urval" },
   { key: "tvilling_namn", label: "Tvilling" },
   { key: "tvilling_org_nr", label: "Tvilling org.nr" },
   { key: "tvilling_likhet", label: "Likhet" },
