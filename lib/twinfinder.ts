@@ -1,9 +1,8 @@
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
 //
 // Steg 2: bolagsdataapi.se (testat och fungerande sedan tidigare)
-// Steg 3-4: tic.io (endpoint/auth/filter_by för SNI+omsättning bekräftat mot
-//           docs.tic.io - se motivering i twin_finder.py. Anställda/geografi
-//           filtreras HÄR i koden på riktiga värden, inte server-sidan.)
+// Steg 3-4: tic.io (SNI, omsättning och anställda filtreras hos tic.io,
+//           geografi filtreras här i koden)
 // Steg 5: foretagskontakt.se (fortfarande OBEKRÄFTAD - kör bara om nyckel
 //           finns, och misslyckas tyst/markeras i resultatet annars)
 
@@ -84,6 +83,10 @@ function docGet(doc: any, ...paths: string[]): any {
   return null;
 }
 
+function normOrgNr(v: any): string {
+  return v === null || v === undefined ? "" : String(v).replace(/\D/g, "");
+}
+
 export async function resolveSourceCompany(
   companyName: string,
   bolagsdataKey: string
@@ -156,18 +159,25 @@ export async function findTwins(
     if (klassMax !== null) empMax = Math.min(empMax, klassMax);
   }
 
+  // Fältnamn enligt docs.tic.io/api-lens/search. Omsättning är i tusental kr
+  // hos tic.io (rs_NetSalesK) men i kronor hos bolagsdataapi.
   const filters: string[] = [];
   if (source.sni_codes?.length) {
-    filters.push("(" + source.sni_codes.map((c) => `sni_2007Code:${c}`).join(" || ") + ")");
+    filters.push(`sniCodes.sni_2007Code:[${source.sni_codes.join(",")}]`);
   }
   if (source.net_revenue) {
-    const revMin = Math.floor(source.net_revenue * (1 - revenueTol));
-    const revMax = Math.floor(source.net_revenue * (1 + revenueTol));
-    filters.push(`rs_NetSalesK:[${revMin} TO ${revMax}]`);
+    const revK = source.net_revenue / 1000;
+    const revMin = Math.floor(revK * (1 - revenueTol));
+    const revMax = Math.ceil(revK * (1 + revenueTol));
+    filters.push(`mostRecentFinancialSummary.rs_NetSalesK:[${revMin}..${revMax}]`);
+  }
+  if (empMin !== null && empMax !== null) {
+    filters.push(`mostRecentFinancialSummary.fn_NumberOfEmployees:[${empMin}..${empMax}]`);
   }
 
   const params = new URLSearchParams({
     q: "*",
+    query_by: "registrationNumber",
     filter_by: filters.join(" && "),
     per_page: String(TIC_MAX_PER_PAGE),
   });
@@ -180,16 +190,17 @@ export async function findTwins(
   }
   const data = await resp.json();
   const hits: any[] = data.hits || data.results || [];
+  const sourceOrgNr = normOrgNr(source.org_nr);
 
   const twins: Company[] = [];
   for (const hit of hits) {
     const doc = hit.document || hit;
     if (debugSink && twins.length === 0) debugSink(doc);
 
-    const candOrgNr = docGet(doc, "registrationNumber", "org_nr");
-    if (!candOrgNr || candOrgNr === source.org_nr || excludeOrgNrs.has(candOrgNr)) continue;
+    const candOrgNr = normOrgNr(docGet(doc, "registrationNumber", "org_nr"));
+    if (!candOrgNr || candOrgNr === sourceOrgNr || excludeOrgNrs.has(candOrgNr)) continue;
 
-    const candEmployees = docGet(doc, "fn_NumberOfEmployees", "employees");
+    const candEmployees = docGet(doc, "mostRecentFinancialSummary.fn_NumberOfEmployees", "fn_NumberOfEmployees");
     if (empMin !== null && empMax !== null && candEmployees !== null) {
       if (!(empMin <= candEmployees && candEmployees <= empMax)) continue;
     }
@@ -205,9 +216,14 @@ export async function findTwins(
       org_nr: candOrgNr,
       name:
         docGet(doc, "mostRecentName", "names[0].nameOrIdentifier", "names[0].legalName", "name") || "",
-      net_revenue: docGet(doc, "rs_NetSalesK", "net_revenue"),
+      net_revenue: (() => {
+        const k = docGet(doc, "mostRecentFinancialSummary.rs_NetSalesK", "rs_NetSalesK");
+        return k === null ? null : k * 1000;
+      })(),
       employees: candEmployees,
-      sni_codes: docGet(doc, "sniCodes", "sni_codes") || [],
+      sni_codes: (docGet(doc, "sniCodes") || [])
+        .map((c: any) => (typeof c === "string" ? c : c.sni_2007Code))
+        .filter(Boolean),
       lan: candLan,
       ort: docGet(doc, "mostRecentRegisteredAddress.city", "ort"),
     });
