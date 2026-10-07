@@ -9,7 +9,9 @@ import {
   fetchTicSource,
   findTwins,
   guessLeadOptions,
+  namnUtanBolagsform,
   resolveSourceCompany,
+  ticKlient,
 } from "@/lib/twinfinder";
 import { parseCsv } from "@/lib/csv";
 
@@ -73,19 +75,30 @@ export async function POST(req: NextRequest) {
   const knownCustomerOrgNrs: Set<string> = new Set(body.known_customer_org_nrs || []);
 
   const rowsOut: ResultRow[] = [];
+  // En tic.io-klient per körning: leads i samma bransch delar sökningar (cache).
+  const tic = ticKlient(ticKey);
+  const sedda = new Set<string>();
 
   for (const lead of leads) {
     const companyName = (lead.foretagsnamn || "").trim();
     if (!companyName) continue;
+    const orgNrCell = (lead.org_nr || lead.orgnr || lead.organisationsnummer || "").trim();
+
+    // Samma lead två gånger i CSV:n kostar inga nya anrop.
+    const leadNyckel = orgNrCell.replace(/\D/g, "") || namnUtanBolagsform(companyName).toLowerCase();
+    if (sedda.has(leadNyckel)) {
+      rowsOut.push({ lead_foretagsnamn: companyName, status: "dublett: samma lead finns tidigare i listan" });
+      continue;
+    }
+    sedda.add(leadNyckel);
 
     let source: Company | null = null;
     let matchning = "";
     let foundTicSource: TicSource | undefined;
     try {
-      const orgNrCell = (lead.org_nr || lead.orgnr || lead.organisationsnummer || "").trim();
       ({ company: source, matchning, ticSource: foundTicSource } = await resolveSourceCompany(
         companyName,
-        ticKey,
+        tic,
         bolagsdataKey,
         typesafeKey,
         orgNrCell || undefined
@@ -124,7 +137,7 @@ export async function POST(req: NextRequest) {
 
     let ticSource: TicSource;
     try {
-      ticSource = foundTicSource ?? (await fetchTicSource(source, ticKey));
+      ticSource = foundTicSource ?? (await fetchTicSource(source, tic));
     } catch (e: any) {
       rowsOut.push({ ...gemensamGrund, status: `fel vid tic.io-sökning: ${e.message || e}` });
       continue;
@@ -167,7 +180,7 @@ export async function POST(req: NextRequest) {
     let twins: Twin[] = [];
     let urval = "";
     try {
-      ({ twins, urval } = await findTwins(source, ticSource, options, ticKey, knownCustomerOrgNrs, typesafeKey));
+      ({ twins, urval } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey));
     } catch (e: any) {
       rowsOut.push({ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` });
       continue;
@@ -203,5 +216,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, tic_anrop: tic.anrop }));
   return NextResponse.json({ rows: rowsOut });
 }

@@ -2,72 +2,78 @@
 
 Appen: https://tvillinganalys.vercel.app
 Vercel-projekt: `tvillinganalys` (team `team_TVRKbPHDZaAR0OC5etLKu3Il`, projekt-ID `prj_NXmuWF23ntHAu247bWaDz1UKvRxM`)
-
-Koden ligger i GitHub-repot `SimonUSL/Tvillinganalys`. Vercel-projektet ska kopplas till repot (Vercel → Settings → Git) så att varje push deployas automatiskt.
+Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas automatiskt till produktion.**
 
 ## Stack
 
 - Next.js 14 (App Router), TypeScript, inga externa npm-paket förutom React/Next.
-- Inget CRM, ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
-- Deploy: Vercel, utan Git — filerna skickas direkt i deploy-anropet (`create_deployment` med `files`-array, `encoding: utf-8`). Varje deploy måste skicka ALLA filer, inte bara ändrade — annars bryts bygget.
-- `vercel.json` sätter `framework: nextjs`, så det behöver inte längre skickas med i varje deploy. Vercel-projektets egen framework-inställning sparas inte (visar `null` i projektet), troligen pga behörighetsbegränsning på detta Vercel-konto/MCP-koppling.
+- Ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
+- Funktionerna körs i Stockholm (`regions: ["arn1"]` i `vercel.json`) — tic.io tar bara emot anrop från SE/NO/DK/FI/DE.
 
 ## Filstruktur
 
 ```
 app/
-  page.tsx            — huvudsidan: klistra in CSV, kör sökning, se resultat, ladda ner CSV, logga ut
+  page.tsx             — huvudsidan: klistra in CSV, kör sökning, se resultat, ladda ner CSV, logga ut
   layout.tsx           — global HTML-skal, laddar Poppins-fonten
-  login/page.tsx        — inloggningssida (Optimals stil: logga, vit box, röd knapp)
-  api/run/route.ts       — tar emot CSV, kör hela sök-flödet, returnerar resultatrader
-  api/login/route.ts      — validerar användarnamn/lösenord, sätter sessions-cookie
-  api/logout/route.ts      — rensar sessions-cookien
+  login/page.tsx       — inloggningssida
+  api/run/route.ts     — tar emot CSV, kör hela flödet per lead, returnerar resultatrader
+  api/login, api/logout — sessions-cookie
 lib/
-  twinfinder.ts          — all sök-logik (steg 2–5), portning av twin_finder.py
+  twinfinder.ts        — all sök-, matchnings- och rankningslogik (se "Flödet" nedan)
   csv.ts               — enkel CSV-parser
-  auth.ts              — signerar/verifierar sessions-cookien (Web Crypto, funkar i Edge-middleware)
-middleware.ts            — skyddar hela appen bakom /login om SITE_PASSWORD är satt
-next.config.js, package.json, tsconfig.json, next-env.d.ts — standard Next.js-uppsättning
+  auth.ts              — signerar/verifierar sessions-cookien
+middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 ```
 
 ## Miljövariabler (Vercel → Project Settings → Environment Variables)
 
-| Variabel | Krävs för | Status |
+| Variabel | Krävs för |
+|---|---|
+| `TIC_API_KEY` | Tvillingsökningen (tic.io LENS). Krävs. |
+| `TYPESAFE_API_KEY` | Jev: väljer rätt bolag, gissar geografi/säsong, bedömer tvillingar. Utan den faller appen tillbaka på enkla regler. |
+| `BOLAGSDATA_API_KEY` | Uppslag av kallbolaget (bolagsdataapi.se). Utan den används tic.io även för det (dyrare för kvoten). |
+| `FORETAGSKONTAKT_API_KEY` | Valfri, obekräftad integration för kontaktpersoner. |
+| `SITE_PASSWORD` / `SITE_USERNAME` | Valfritt inloggningsskydd. |
+
+Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör appen mot riktiga API:er — **varje körning drar på tic.io-kvoten.**
+
+## API-budget
+
+| API | Kvot (observerad 2026-10-07) | Används till |
 |---|---|---|
-| `BOLAGSDATA_API_KEY` | Steg 2 — slå upp bolag via namn | Satt, bekräftat fungerande sedan tidigare |
-| `TIC_API_KEY` | Steg 3–4 — söka tvillingar | Okänt om den är satt — jag har inte behörighet att lista env-variabler via Vercel MCP just nu (403 Forbidden) |
-| `FORETAGSKONTAKT_API_KEY` | Steg 5 — hämta kontaktperson | Valfri. Om den saknas hoppas steget bara över (ingen kontakt, men tvillingen visas) |
-| `SITE_PASSWORD` | Inloggningsskydd | Valfri. Om den saknas är appen helt oskyddad |
-| `SITE_USERNAME` | Inloggningsskydd | Valfri — om satt krävs både användarnamn och lösenord, annars bara lösenord |
+| tic.io LENS | **200 anrop/månad**, 120/min, max 20 olika IP per nyckel/månad | tvillingsökning |
+| bolagsdataapi.se | 500 anrop (period anges inte i svaret) | uppslag av kallbolaget (2 per lead) |
+| TypeSafe Jev | ingen praktisk gräns, ~0,03 kr per lead | alla bedömningar |
 
-**Viktigast att kontrollera just nu:** att `TIC_API_KEY` faktiskt är satt och giltig. Utan den, eller med en ogiltig nyckel som ändå ger svar från tic.io, kommer sökningen att ge "inga tvillingar hittade" på alla rader utan att visa ett tydligt fel.
+tic.io-anrop per lead i dag: **nischbransch ~1, trång bransch ~2–3**, 0 för leads i en bransch som redan sökts i samma körning, 0 för dubbletter. Varje körning loggar `tic_anrop` i Vercels runtime-loggar.
 
-## Kända osäkerheter i sök-logiken (ärvt från `twin_finder.py`-planen)
+## Flödet per lead
 
-- tic.io-sökningen (fält som `sni_2007Code`, `rs_NetSalesK`, `fn_NumberOfEmployees`, länsfiltret) bygger på tic.io:s publika dokumentation, **aldrig bekräftad mot ett skarpt konto**. Om fältnamnen är fel ger tic.io troligen 0 träffar istället för ett fel — vilket ser ut exakt som "inga tvillingar hittade".
-- företagskontakt.se-integrationen är på samma sätt obekräftad, men misslyckas tyst (påverkar inte om en tvilling hittas, bara om kontaktuppgifter visas).
+1. **Kallbolaget** (`resolveSourceCompany`): namnsökning hos bolagsdataapi utan bolagsform (SkiStar heter "SkiStar *Aktiebolag*"), Jev väljer rätt träff eller svarar "ingen". Detaljanropet ger verksamhetsbeskrivning, län och SNI. Valfri CSV-kolumn `org_nr` pekar ut bolaget direkt. tic.io:s namnsökning är reserv.
+2. **Geografi och säsong** (`guessLeadOptions`): tomma CSV-celler gissas av Jev från verksamhetsbeskrivningen. Ifyllda celler gäller alltid.
+3. **Tvillingar** (`findTwins`):
+   - Steg A: alla bolag med samma huvud-SNI, störst först. Antalet avgör läget: **≤ 300 = nischbransch** (de största i branschen tas, storlek väger lätt), **fler = trång bransch** (urval på storlek ⅓×–3×, annars "närmast underifrån").
+   - Jev bedömer varje kandidat: hur lik verksamheten är, holding/vilande, samma koncern som kallbolaget, ev. säsong. Koden väger ihop till en poäng.
+   - Ger SNI-sökningen färre än 10 starka tvillingar körs en nyckelordssökning på verksamhetsbeskrivningen (Jev väljer ordet) för att fånga bolag med annan SNI-kod.
+   - Bara en tvilling per koncern: Jev jämför topp 20 parvis.
+4. **Kontaktperson** (foretagskontakt.se, valfri).
 
-## Statuskolumnen — så läser du en misslyckad körning
+Kolumnerna Matchning, Urval, Geografi, Säsong och Likhet visar varför varje val gjordes.
 
-Varje rad i resultatet får en status. Vilken status som visas talar om var i kedjan det stannade:
+## Nästa steg: cache mellan körningar (rekommenderas när appen används skarpt)
 
-- **"ej hittat"** → bolagsdataapi.se hittade inte företaget på namnet (steg 2 — borde fungera, redan bekräftat)
-- **"ingen SNI-kod hittad"** → bolaget hittades men saknar bransch-kod att söka tvillingar på
-- **"inga tvillingar hittade"** → tic.io-sökningen (steg 3–4) gav inga träffar — mest troliga platsen för dagens problem
-- **"fel vid tic.io-sökning: ..."** → ett riktigt fel från tic.io, t.ex. saknad/ogiltig nyckel — texten efter kolon visar exakt vad
-- **"tvilling hittad" / "tvilling hittad (ingen kontakt)"** → fungerade hela vägen, med eller utan kontaktuppgift
+Det största kvarvarande sättet att spara tic.io-anrop är att **cacha tic.io-svar i ~30 dagar** i en liten nyckel–värde-databas, t.ex. **Upstash Redis via Vercel Marketplace** (gratisnivå räcker). Då kostar en omkörning av samma leads, eller nya leads i en bransch som redan sökts, inga tic.io-anrop alls. Bolagsdata ändras långsamt, så 30 dagar är rimligt.
 
-**Nästa steg för att felsöka dagens "hittade inget":** vilken av dessa statusar visades i Status-kolumnen för raderna i körningen? Det avgör om problemet är en saknad/fel `TIC_API_KEY`, eller att fält-gissningarna mot tic.io behöver justeras.
+Görs när vi bekräftat att appen ska användas på riktiga kundlistor. Det kräver:
+1. Lägg till Upstash Redis i Vercel-projektet (Storage → Marketplace) — det sätter miljövariablerna automatiskt.
+2. I koden: `ticSearch` i `lib/twinfinder.ts` har redan en cache per körning (`Tic.cache`). Den byggs ut så att den först läser från Redis och skriver dit efter ett lyckat anrop, med nyckeln = sökningens JSON och 30 dagars livslängd.
 
-## Deploy-process (utan Git)
+Alternativ till cache: en större tic.io-plan (200 anrop/mån är lite för det här användningsområdet).
 
-1. Läs alla filer som ska ingå (hela listan i "Filstruktur" ovan — alltid alla, inte bara ändrade).
-2. Anropa Vercel MCP `create_deployment` med `teamId`, `project: "tvillinganalys"`, `target: "production"`, `projectSettings: { framework: "nextjs" }` och hela `files`-arrayen.
-3. Polla `get_deployment` tills `readyState` är `READY`.
-4. Produktions-URL:en (tvillinganalys.vercel.app) pekar automatiskt om till den senaste READY-deployen.
+## Kända begränsningar
 
-## Nästa steg
-
-1. Bekräfta att `TIC_API_KEY` är satt i Vercel och giltig.
-2. Kör en känd testsökning och läs av statuskolumnen enligt tabellen ovan.
-3. Om tic.io ger 0 träffar trots en bekräftat giltig nyckel: fältnamnen i `lib/twinfinder.ts` → `findTwins()` behöver justeras mot tic.io:s faktiska svar (kräver att man loggar/inspekterar ett riktigt svar från deras API).
+- tic.io:s filter släpper bara igenom bolag som har fältet: bolag utan omsättning hos tic.io kommer inte med i storleksfiltrerade sökningar.
+- tic.io:s nyckelordssökning kräver att alla ord matchar — därför ett enda ord.
+- Med många leads per körning kan Vercels tidsgräns (`maxDuration = 60` s) och tic.io:s 120 anrop/min bli begränsande.
+- foretagskontakt.se-integrationen är obekräftad och misslyckas tyst.
