@@ -388,7 +388,16 @@ async function ticSearch(ticKey: string, body: Record<string, any>): Promise<any
     throw new Error(`tic.io-sokning misslyckades (${resp.status}): ${(await resp.text()).slice(0, 300)}`);
   }
   const data = await resp.json();
-  return (data.hits || data.results || []).map((hit: any) => hit.document || hit);
+  // POST svarar i Typesense multi-search-format: { results: [{ hits, ... }] }.
+  // Ett fel i själva sökningen (t.ex. okänt filterfält) kommer då som HTTP 200
+  // med "error" inuti results - det ska synas, inte se ut som noll träffar.
+  const result = Array.isArray(data.results) ? data.results[0] || {} : data;
+  if (result.error) {
+    throw new Error(`tic.io-sokning misslyckades (${result.code ?? "?"}): ${String(result.error).slice(0, 300)}`);
+  }
+  return (result.hits || [])
+    .map((hit: any) => hit.document || hit)
+    .filter((doc: any) => doc && doc.registrationNumber);
 }
 
 function range(field: string, min: number, max: number): string {
