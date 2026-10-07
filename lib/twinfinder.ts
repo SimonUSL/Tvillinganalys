@@ -913,6 +913,7 @@ export async function findTwins(
 
   const seen = new Set<string>();
   const pool: { company: Twin; profile: TicProfile }[] = [];
+  const koncernInfo = new Map<Twin, KoncernInfo>();
   for (const doc of docs) {
     const candOrgNr = normOrgNr(docGet(doc, "registrationNumber", "org_nr"));
     if (!candOrgNr || candOrgNr === sourceOrgNr || excludeOrgNrs.has(candOrgNr) || seen.has(candOrgNr)) continue;
@@ -944,6 +945,14 @@ export async function findTwins(
         ort: docGet(doc, "mostRecentRegisteredAddress.city", "ort"),
         verksamhet: profile.business_description,
       },
+    });
+    koncernInfo.set(pool[pool.length - 1].company, {
+      name: profile.name,
+      address: [docGet(doc, "mostRecentRegisteredAddress.streetAddress"), docGet(doc, "mostRecentRegisteredAddress.city")]
+        .filter(Boolean)
+        .join(", ") || null,
+      website: profile.website,
+      owned_through: profile.owned_through,
     });
   }
 
@@ -1010,7 +1019,82 @@ export async function findTwins(
   // konkurrenter) - då går den närmast kallbolaget i storlek först.
   const steg = (t: Twin) => Math.round((t.poang ?? 0) * 20);
   twins.sort((a, b) => steg(b) - steg(a) || (narhet.get(b) ?? 0) - (narhet.get(a) ?? 0));
-  return { urval, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
+  const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
+  console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
+  return { urval, twins: kvar.slice(0, MAX_TWINS_PER_LEAD) };
+}
+
+// --- Steg 4b: bara ett bolag per koncern bland tvillingarna --------------
+
+const KONCERN_KONTROLL_ANTAL = 20;
+const MAX_SAMMA_GRUPP = 0.5;
+
+interface KoncernInfo {
+  name: string;
+  address: string | null;
+  website: string | null;
+  owned_through: string[];
+}
+
+// Varje tvilling jämförs med alla högre rankade (en Jev-request per tvilling,
+// alla parallellt). Sedan går koden uppifrån och behåller en tvilling bara om
+// den inte hör ihop med någon redan behållen - dvs. den högst rankade i varje
+// koncern stannar kvar. Misslyckas Jev behålls tvillingen.
+async function dropSameGroup(
+  ranked: Twin[],
+  info: Map<Twin, KoncernInfo>,
+  typesafeKey: string
+): Promise<{ kvar: Twin[]; borttagna: string[] }> {
+  const sammaGrupp: number[][] = await Promise.all(
+    ranked.map(async (twin, i) => {
+      if (i === 0) return [];
+      try {
+        const questions: Record<string, any> = {};
+        for (let j = 0; j < i; j++) {
+          questions[`par_${j}`] = {
+            type: "noul",
+            instructions:
+              `Are \`candidate\` and \`higher_ranked[${j}]\` part of the same corporate group, i.e. parent, subsidiary ` +
+              "or sister companies under the same owner? Signs are a shared distinctive brand name, the same address, " +
+              "the same website, or `owned_through` naming the other company.",
+            criteria: {
+              true: "They belong to the same group or are run by the same owner.",
+              false:
+                "They are independent companies. Sharing only a place name (such as a town, mountain or region) or an industry word does not make them the same group.",
+            },
+          };
+        }
+        const resp = await fetch(TYPESAFE_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${typesafeKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "jev-latest",
+            state: { candidate: info.get(twin), higher_ranked: ranked.slice(0, i).map((t) => info.get(t)) },
+            questions,
+          }),
+        });
+        if (!resp.ok) return [];
+        const answers = (await resp.json()).answers;
+        return Array.from({ length: i }, (_, j) => answers[`par_${j}`]?.noul ?? 0);
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const kvar: Twin[] = [];
+  const kvarIndex: number[] = [];
+  const borttagna: string[] = [];
+  ranked.forEach((twin, i) => {
+    const krock = kvarIndex.find((j) => (sammaGrupp[i][j] ?? 0) > MAX_SAMMA_GRUPP);
+    if (krock !== undefined) {
+      borttagna.push(`${twin.name} (samma koncern som ${ranked[krock].name})`);
+    } else {
+      kvar.push(twin);
+      kvarIndex.push(i);
+    }
+  });
+  return { kvar, borttagna };
 }
 
 export async function enrichContact(company: Company, foretagskontaktKey: string): Promise<void> {
