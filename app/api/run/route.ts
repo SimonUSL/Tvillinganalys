@@ -16,7 +16,6 @@ import {
   ticKlient,
 } from "@/lib/twinfinder";
 import { parseCsv } from "@/lib/csv";
-import { classifyInquiry, identifyCompany, parseFormExports, skalAttHoppaOver } from "@/lib/inkorg";
 
 // Säsongsceller som betyder "ingen säsong" (och inte ska gissas av Jev).
 const INGEN_SASONG = new Set(["nej", "ingen", "-", "no", "none"]);
@@ -156,7 +155,7 @@ async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
   let twins: Twin[] = [];
   let urval = "";
   try {
-    ({ twins, urval } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey));
+    ({ twins, urval } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
   } catch (e: any) {
     return [{ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` }];
   }
@@ -204,8 +203,13 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   // En tic.io-klient per körning: leads i samma bransch delar sökningar (cache).
+  // Tak för tic.io-anrop i körningen (200/mån på nyckeln). Når vi taket får
+  // resterande leads bara tvillingar från bolagsdataapi.
+  const maxTic = Number.isFinite(Number(body.max_tic_anrop)) && body.max_tic_anrop !== null && body.max_tic_anrop !== undefined
+    ? Math.max(0, Math.floor(Number(body.max_tic_anrop)))
+    : null;
   const ctx: Ctx = {
-    tic: ticKlient(ticKey),
+    tic: ticKlient(ticKey, maxTic),
     bolagsdataKey,
     typesafeKey,
     foretagskontaktKey,
@@ -214,55 +218,20 @@ export async function POST(req: NextRequest) {
   const rowsOut: ResultRow[] = [];
   const sedda = new Set<string>();
 
-  if (Array.isArray(body.exports)) {
-    // --- Formulärexporter: klassa, identifiera, tvillingsök de som är värda det.
-    if (!typesafeKey) {
-      return NextResponse.json({ error: "Import av formulärexporter kräver TYPESAFE_API_KEY." }, { status: 500 });
-    }
-    const fran = new Date(`${body.from}T00:00:00`);
-    const till = new Date(`${body.to}T23:59:59`);
-    const forfragningar = parseFormExports(body.exports, fran, till);
-    if (!forfragningar.length) {
-      return NextResponse.json({ error: "Inga förfrågningar i valt datumintervall." }, { status: 400 });
-    }
-    // Klassningen är billig (bara Jev) och körs parallellt för alla.
-    const klassningar = await Promise.all(
-      forfragningar.map((f) => classifyInquiry(f, typesafeKey).catch((e) => e as Error))
-    );
-    for (let i = 0; i < forfragningar.length; i++) {
-      const f = forfragningar[i];
-      const k = klassningar[i];
-      const extra: Partial<ResultRow> = {
-        forfragan_datum: datumText(f.datum),
-        forfragan_formular: f.formular,
-        forfragan_doman: f.doman,
-        forfragan_text: f.meddelande.replace(/\s+/g, " ").slice(0, 300),
-      };
-      if (k instanceof Error) {
-        rowsOut.push({ ...extra, lead_foretagsnamn: f.doman || "", status: `fel vid klassning: ${k.message}` });
+  if (Array.isArray(body.leads)) {
+    // --- Granskade leads från förhandsgranskningen av formulärexporter.
+    for (const lead of body.leads as { namn: string; org_nr?: string; extra?: Partial<ResultRow> }[]) {
+      const namn = (lead.namn || "").trim();
+      const orgNr = (lead.org_nr || "").replace(/\D/g, "");
+      if (!namn && !orgNr) continue;
+      // Ett bolag med flera förfrågningar tvillingsöks en gång.
+      const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
+      if (sedda.has(nyckel)) {
+        rowsOut.push({ ...lead.extra, lead_foretagsnamn: namn || orgNr, status: "dublett: samma bolag finns tidigare i listan" });
         continue;
       }
-      extra.forfragan_typ = k.beskrivning;
-      const hoppa = skalAttHoppaOver(f, k);
-      if (hoppa) {
-        rowsOut.push({ ...extra, lead_foretagsnamn: k.namnfras || f.doman || "", status: `ej tvillingsökt: ${hoppa}` });
-        continue;
-      }
-      let resolved;
-      try {
-        resolved = await identifyCompany(f, k, ctx.tic, bolagsdataKey, typesafeKey);
-      } catch (e: any) {
-        rowsOut.push({ ...extra, lead_foretagsnamn: k.namnfras || f.doman || "", status: `fel vid bolagssökning: ${e.message || e}` });
-        continue;
-      }
-      // Flera förfrågningar från samma bolag ger bara en tvillingsökning.
-      const nyckel = resolved.company?.org_nr;
-      if (nyckel && sedda.has(nyckel)) {
-        rowsOut.push({ ...extra, lead_foretagsnamn: resolved.company!.name, status: "dublett: samma bolag finns tidigare i listan" });
-        continue;
-      }
-      if (nyckel) sedda.add(nyckel);
-      rowsOut.push(...(await processLead({ namn: resolved.sokterm || f.doman || "", resolved, extra }, ctx)));
+      sedda.add(nyckel);
+      rowsOut.push(...(await processLead({ namn: namn || orgNr, orgNr, extra: lead.extra }, ctx)));
     }
   } else {
     // --- CSV med leads.
@@ -294,5 +263,5 @@ export async function POST(req: NextRequest) {
   }
 
   console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, tic_anrop: ctx.tic.anrop }));
-  return NextResponse.json({ rows: rowsOut });
+  return NextResponse.json({ rows: rowsOut, tic_anrop: ctx.tic.anrop });
 }

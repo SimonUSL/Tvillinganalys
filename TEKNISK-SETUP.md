@@ -43,17 +43,20 @@ Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör a
 | API | Kvot (observerad 2026-10-07) | Används till |
 |---|---|---|
 | tic.io LENS | **200 anrop/månad**, 120/min, max 20 olika IP per nyckel/månad | tvillingsökning |
-| bolagsdataapi.se | 500 anrop (period anges inte i svaret) | uppslag av kallbolaget (2 per lead) |
+| bolagsdataapi.se | **500 anrop/dygn** (nollställs vid midnatt, gratis, högre gräns kan sökas) | uppslag av kallbolaget (2 per lead) och tvillingar i första hand (~25 per lead) |
 | TypeSafe Jev | ingen praktisk gräns, ~0,03 kr per lead | alla bedömningar |
 
-tic.io-anrop per lead i dag: **nischbransch ~1, trång bransch ~2–3**, 0 för leads i en bransch som redan sökts i samma körning, 0 för dubbletter. Varje körning loggar `tic_anrop` i Vercels runtime-loggar.
+tic.io-anrop per lead: **0 när bolagsdataapi räcker** (typiskt lokala hantverks- och tjänstebolag), annars ~1–3. Varje körning har ett tak (fältet "Max tic.io-anrop", förval 3 per lead); när taket nås får resterande leads bara tvillingar från bolagsdataapi. Körningen visar och loggar antalet tic.io-anrop.
+
+**Testa utan att röra tic.io-kvoten:** kör med "Max tic.io-anrop" = 0 (eller `max_tic_anrop: 0` mot `/api/run`).
 
 ## Flödet per lead
 
 1. **Kallbolaget** (`resolveSourceCompany`): namnsökning hos bolagsdataapi utan bolagsform (SkiStar heter "SkiStar *Aktiebolag*"), Jev väljer rätt träff eller svarar "ingen". Detaljanropet ger verksamhetsbeskrivning, län och SNI. Valfri CSV-kolumn `org_nr` pekar ut bolaget direkt. tic.io:s namnsökning är reserv.
 2. **Geografi och säsong** (`guessLeadOptions`): tomma CSV-celler gissas av Jev från verksamhetsbeskrivningen. Ifyllda celler gäller alltid.
 3. **Tvillingar** (`findTwins`):
-   - Steg A: alla bolag med samma huvud-SNI, störst först. Antalet avgör läget: **≤ 300 = nischbransch** (de största i branschen tas, storlek väger lätt), **fler = trång bransch** (urval på storlek ⅓×–3×, annars "närmast underifrån").
+   - Fas 0, bolagsdataapi: Jev väljer ett branschord som konkurrenter brukar ha i bolagsnamnet ("städ", "assistans"), bolagsdataapi söker namn med ordet (+ län om geografin är relevant, + liknande omsättning), Jev sållar på namnen, de 25 bästa får detaljanrop och full Jev-bedömning. Ger det minst 10 starka tvillingar används inte tic.io alls.
+   - Annars tic.io, steg A: alla bolag med samma huvud-SNI, störst först. Antalet avgör läget: **≤ 300 = nischbransch** (de största i branschen tas, storlek väger lätt), **fler = trång bransch** (urval på storlek ⅓×–3×, annars "närmast underifrån").
    - Jev bedömer varje kandidat: hur lik verksamheten är, holding/vilande, samma koncern som kallbolaget, ev. säsong. Koden väger ihop till en poäng.
    - Ger SNI-sökningen färre än 10 starka tvillingar körs en nyckelordssökning på verksamhetsbeskrivningen (Jev väljer ordet) för att fånga bolag med annan SNI-kod.
    - Bara en tvilling per koncern: Jev jämför topp 20 parvis.
@@ -71,13 +74,16 @@ Görs när vi bekräftat att appen ska användas på riktiga kundlistor. Det kr�
 
 Alternativ till cache: en större tic.io-plan (200 anrop/mån är lite för det här användningsområdet).
 
-## Import av formulärexporter ("inkorgen") — `lib/inkorg.ts`
+## Import av formulärexporter ("inkorgen") — `lib/inkorg.ts`, `app/api/preview`
 
-Läget "Formulärexporter" i appen: ladda upp webbplatsens råa formulärexporter (boka demo, kontaktformulär, kontaktsida, offertförfrågan) och välj period. Testat 2026-10-07 på senaste veckans förfrågningar (17 efter dubblettrensning, 6 tvillingsökta bolag, ~20 tic.io-anrop, 22 s):
+Läget "Formulärexporter" i appen: ladda upp webbplatsens råa formulärexporter (boka demo, kontaktformulär, kontaktsida, offertförfrågan) och välj period. Två steg:
+
+- **Förhandsgranska** (inga tic.io-anrop): Jev klassar, bolagsdataapi föreslår bolag. Du bockar i vilka som ska tvillingsökas och rättar eller fyller i bolagsnamn/org.nr där Jev är osäker.
+- **Kör tvillingsökning** för de valda, inom taket för tic.io-anrop. Testat 2026-10-07 på senaste veckans förfrågningar (17 efter dubblettrensning, 6 tvillingsökta bolag, ~20 tic.io-anrop, 22 s):
 
 1. Koden läser alla fyra formaten, mappar kolumnerna (e-post- och meddelandefälten heter olika i varje export), slår ihop, tar bort dubbletter (samma e-post inom 10 min — samma förfrågan hamnar ofta i två formulär) och väljer datumintervall.
 2. Jev klassar varje förfrågan med Optimals erbjudande som kontext: typ (ny förfrågan / befintlig kund / säljer till Optimal / avregistrering / övrigt / oklart), avsändare (företag / förening / offentlig / privatperson) och om det är en mäklare. Klassningen stämde på alla 17 i testet.
-3. Bolaget identifieras: e-postdomänens stam söks hos bolagsdataapi (träffade ungefär hälften), annars tic.io-sökning på webbplats/e-post (`hyperlinks.hyperlink`, `emailAddresses.emailAddress`, 1 anrop, bara som reserv). Gratismejl: koden plockar ut namnkandidater ur meddelandet och Jev väljer. Inget säkert → "kontrollera manuellt".
+3. Bolaget identifieras via bolagsdataapi: ett namn ur meddelandet (Jev väljer bland kandidater som koden plockat ut) eller e-postdomänens stam. Inget säkert → fältet lämnas tomt för användaren. (En tic.io-sökning på webbplats/e-post, `hyperlinks.hyperlink`, fungerar men kostar ett anrop per bolag och togs bort till förmån för manuell ifyllnad.)
 4. Bara nya förfrågningar från företag, föreningar och offentliga aktörer går vidare till tvillingsökningen. Privatpersoner, säljare, spam, oklara, utländska domäner och befintliga kunder hoppas över med orsak. Mäklare hoppas över tills vidare (se nedan).
 5. En osäker bolagsmatchning (under 70 %) godtas inte när söktermen är gissad ur en förfrågan — då provas nästa sökväg, annars "kontrollera manuellt".
 

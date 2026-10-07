@@ -4,14 +4,7 @@
 // går vidare till tvillingsökningen; resten får en orsak.
 
 import { parseCsv } from "./csv";
-import {
-  LeadKontext,
-  SourceResult,
-  Tic,
-  namnUtanBolagsform,
-  resolveViaBolagsdata,
-  resolveViaWebsite,
-} from "./twinfinder";
+import { LeadKontext, SourceResult, namnUtanBolagsform, resolveViaBolagsdata } from "./twinfinder";
 
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 
@@ -253,31 +246,22 @@ export function skalAttHoppaOver(f: Forfragan, k: Klassning): string | null {
   if (k.maklare >= MIN_MAKLARE) return `mäklare, utesluts tills vidare (Jev ${procent(k.maklare)})`;
   const tld = f.doman?.split(".").pop() || "";
   if (UTLANDSKA_TLD.has(tld)) return `utländsk domän (.${tld}), finns inte i svenska registret`;
-  if (!k.namnfras && (f.gratismejl || !f.doman)) return "kontrollera manuellt: inget bolagsnamn i förfrågan";
   return null;
 }
 
-// Hitta avsändarens bolag: söktermen (namn ur meddelandet eller domänens stam)
-// hos bolagsdataapi, sedan domänen bland bolagens webbplatser hos tic.io.
+// Hitta avsändarens bolag via bolagsdataapi: söktermen är ett namn ur
+// meddelandet eller e-postdomänens stam. Inga tic.io-anrop. Är Jev osäker
+// lämnas fältet tomt i förhandsgranskningen och användaren fyller i själv.
 export async function identifyCompany(
   f: Forfragan,
   k: Klassning,
-  tic: Tic,
   bolagsdataKey: string | undefined,
   typesafeKey: string | undefined
 ): Promise<SourceResult & { sokterm: string }> {
   const kontext: LeadKontext = { message: utanPersonuppgifter(f.meddelande).slice(0, 800), email_domain: f.doman };
-  const sokterm = k.namnfras || (f.doman ? f.doman.replace(/\.[a-z]+$/, "") : "");
-  const forsok: string[] = [];
-  if (sokterm && bolagsdataKey) {
-    const r = await resolveViaBolagsdata(namnUtanBolagsform(sokterm), bolagsdataKey, typesafeKey, kontext);
-    if (r.company) return { ...r, sokterm };
-    forsok.push(`bolagsdataapi: ${r.matchning}`);
-  }
-  if (f.doman && !f.gratismejl) {
-    const r = await resolveViaWebsite(f.doman, tic, typesafeKey, kontext);
-    if (r.company) return { ...r, sokterm };
-    forsok.push(`tic.io: ${r.matchning}`);
-  }
-  return { company: null, matchning: `kontrollera manuellt: ${forsok.join("; ") || "ingen sökterm"}`, sokterm };
+  const sokterm = k.namnfras || (f.doman && !f.gratismejl ? f.doman.replace(/\.[a-z]+$/, "") : "");
+  if (!sokterm) return { company: null, matchning: "inget bolagsnamn i förfrågan – fyll i själv", sokterm };
+  if (!bolagsdataKey) return { company: null, matchning: "BOLAGSDATA_API_KEY saknas – fyll i själv", sokterm };
+  const r = await resolveViaBolagsdata(namnUtanBolagsform(sokterm), bolagsdataKey, typesafeKey, kontext);
+  return r.company ? { ...r, sokterm } : { ...r, matchning: `${r.matchning} – fyll i själv`, sokterm };
 }
