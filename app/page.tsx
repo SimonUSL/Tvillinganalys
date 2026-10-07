@@ -64,6 +64,7 @@ export default function Home() {
   const [granskning, setGranskning] = useState<Granskad[] | null>(null);
   const [maxTic, setMaxTic] = useState("");
   const [ticAnrop, setTicAnrop] = useState<number | null>(null);
+  const [ticCache, setTicCache] = useState(0);
   const [rows, setRows] = useState<ResultRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +130,7 @@ export default function Home() {
       );
       setRows(data.rows);
       setTicAnrop(data.tic_anrop ?? null);
+      setTicCache(data.tic_fran_cache ?? 0);
     } catch (e: any) {
       setError(e.message || String(e));
     } finally {
@@ -411,6 +413,7 @@ export default function Home() {
           {rows && (
             <span style={{ color: "#64646A", fontSize: 13 }}>
               {rows.length} rader{ticAnrop !== null ? ` · ${ticAnrop} tic.io-anrop` : ""}
+              {ticCache ? ` (+${ticCache} från cache)` : ""}
             </span>
           )}
         </div>

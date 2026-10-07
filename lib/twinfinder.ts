@@ -1,3 +1,5 @@
+import { cacheGet, cacheNyckel, cacheSet } from "./cache";
+
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
 //
 // Steg 2: namnsökning hos bolagsdataapi.se, Jev väljer rätt träff (tic.io som reserv)
@@ -348,11 +350,16 @@ async function resolveViaTic(companyName: string, tic: Tic, typesafeKey?: string
 }
 
 async function bolagsdataGet(path: string, bolagsdataKey: string): Promise<any> {
+  const nyckel = cacheNyckel("bd", path); // nyckeln är sökvägen, aldrig API-nyckeln
+  const sparad = await cacheGet<any>(nyckel);
+  if (sparad) return sparad;
   const resp = await fetch(`${BOLAGSDATA_BASE}${path}`, { headers: { "x-api-key": bolagsdataKey } });
   // Ett fel från API:et (fel nyckel, slut på kvot osv.) ska synas i statusen,
-  // inte se ut som att bolaget inte finns.
+  // inte se ut som att bolaget inte finns. Fel cachas inte.
   if (!resp.ok) throw new Error(`bolagsdataapi ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
-  return resp.json();
+  const data = await resp.json();
+  await cacheSet(nyckel, data);
+  return data;
 }
 
 export async function resolveViaBolagsdata(
@@ -509,10 +516,11 @@ export interface Tic {
   key: string;
   cache: Map<string, Promise<TicHits>>;
   anrop: number; // faktiska anrop mot tic.io i körningen
+  cacheTraffar: number; // svar från Redis-cachen (kostar ingen kvot)
   maxAnrop: number | null; // tak för körningen; null = inget tak
 }
 export function ticKlient(key: string, maxAnrop: number | null = null): Tic {
-  return { key, cache: new Map(), anrop: 0, maxAnrop };
+  return { key, cache: new Map(), anrop: 0, cacheTraffar: 0, maxAnrop };
 }
 
 export class TicBudgetSlut extends Error {
@@ -532,7 +540,30 @@ function ticSearch(tic: Tic, body: Record<string, any>): Promise<TicHits> {
   return promise;
 }
 
+// Bara fälten appen använder sparas i cachen - hela tic.io-poster är stora.
+const TIC_CACHE_FALT = [
+  "registrationNumber", "names", "legalEntityType", "mostRecentPurpose", "sniCodes", "mostRecentFinancialSummary",
+  "cNbrEmployeesInterval", "hyperlinks", "registeredOffices", "registeredOfficeCountyCode",
+  "mostRecentRegisteredAddress", "currentBeneficialOwners",
+];
+function trimTicDoc(doc: any): any {
+  const ut: any = {};
+  for (const f of TIC_CACHE_FALT) if (doc[f] !== undefined && doc[f] !== null) ut[f] = doc[f];
+  if (ut.names) ut.names = ut.names.slice(0, 1);
+  if (ut.hyperlinks) ut.hyperlinks = ut.hyperlinks.slice(0, 3);
+  if (ut.currentBeneficialOwners) ut.currentBeneficialOwners = ut.currentBeneficialOwners.map((o: any) => ({ throughName: o.throughName }));
+  return ut;
+}
+
 async function ticSearchUncached(tic: Tic, body: Record<string, any>): Promise<TicHits> {
+  const nyckel = cacheNyckel("tic", body);
+  const sparad = await cacheGet<{ found: number; docs: any[] }>(nyckel);
+  if (sparad) {
+    tic.cacheTraffar++;
+    const docs: TicHits = sparad.docs;
+    docs.found = sparad.found;
+    return docs;
+  }
   if (!ticBudgetKvar(tic)) throw new TicBudgetSlut();
   tic.anrop++;
   const resp = await fetch(TIC_SEARCH_URL, {
@@ -552,9 +583,10 @@ async function ticSearchUncached(tic: Tic, body: Record<string, any>): Promise<T
     throw new Error(`tic.io-sokning misslyckades (${result.code ?? "?"}): ${String(result.error).slice(0, 300)}`);
   }
   const docs: TicHits = (result.hits || [])
-    .map((hit: any) => hit.document || hit)
+    .map((hit: any) => trimTicDoc(hit.document || hit))
     .filter((doc: any) => doc && doc.registrationNumber);
   docs.found = result.found;
+  await cacheSet(nyckel, { found: docs.found, docs });
   return docs;
 }
 

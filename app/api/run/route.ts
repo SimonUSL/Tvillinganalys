@@ -262,6 +262,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, tic_anrop: ctx.tic.anrop }));
-  return NextResponse.json({ rows: rowsOut, tic_anrop: ctx.tic.anrop });
+  console.log(
+    JSON.stringify({ steg: "körning klar", leads: sedda.size, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar })
+  );
+  return NextResponse.json({ rows: rowsOut, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar });
 }

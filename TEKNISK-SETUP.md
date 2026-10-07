@@ -64,15 +64,14 @@ tic.io-anrop per lead: **0 när bolagsdataapi räcker** (typiskt lokala hantverk
 
 Kolumnerna Matchning, Urval, Geografi, Säsong och Likhet visar varför varje val gjordes.
 
-## Nästa steg: cache mellan körningar (rekommenderas när appen används skarpt)
+## Cache mellan körningar — `lib/cache.ts`
 
-Det största kvarvarande sättet att spara tic.io-anrop är att **cacha tic.io-svar i ~30 dagar** i en liten nyckel–värde-databas, t.ex. **Upstash Redis via Vercel Marketplace** (gratisnivå räcker). Då kostar en omkörning av samma leads, eller nya leads i en bransch som redan sökts, inga tic.io-anrop alls. Bolagsdata ändras långsamt, så 30 dagar är rimligt.
+tic.io- och bolagsdataapi-svar sparas i **Upstash Redis** (kopplad via Vercel → Storage) i **180 dagar** (`CACHE_DAGAR`). En omkörning av samma leads, eller nya leads i en bransch som redan sökts, kostar då inga tic.io-anrop. Cacheträffar räknas inte mot taket; körningen visar "(+N från cache)".
 
-Görs när vi bekräftat att appen ska användas på riktiga kundlistor. Det kräver:
-1. Lägg till Upstash Redis i Vercel-projektet (Storage → Marketplace) — det sätter miljövariablerna automatiskt.
-2. I koden: `ticSearch` i `lib/twinfinder.ts` har redan en cache per körning (`Tic.cache`). Den byggs ut så att den först läser från Redis och skriver dit efter ett lyckat anrop, med nyckeln = sökningens JSON och 30 dagars livslängd.
-
-Alternativ till cache: en större tic.io-plan (200 anrop/mån är lite för det här användningsområdet).
+- Variablerna sätts automatiskt av Vercel (`KV_REST_API_URL`, `KV_REST_API_TOKEN`; även `UPSTASH_REDIS_REST_*` och `CACHE_`-prefix fungerar). Lokalt: lägg samma två i `.env.local`.
+- Saknas variablerna eller strular Redis körs allt som vanligt utan cache.
+- tic.io-poster trimmas till de fält appen använder innan de sparas (hela poster är flera kB).
+- 180 dagar är en avvägning: bokslut uppdateras årligen, men nya bolag startar och andra går i konkurs. Ändra `CACHE_DAGAR` vid behov. Fel cachas aldrig.
 
 ## Import av formulärexporter ("inkorgen") — `lib/inkorg.ts`, `app/api/preview`
 
