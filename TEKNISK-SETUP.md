@@ -71,16 +71,23 @@ Görs när vi bekräftat att appen ska användas på riktiga kundlistor. Det kr�
 
 Alternativ till cache: en större tic.io-plan (200 anrop/mån är lite för det här användningsområdet).
 
-## Planerat: importera formulärexporter direkt ("inkorgen")
+## Import av formulärexporter ("inkorgen") — `lib/inkorg.ts`
 
-Mål: ladda upp veckans råa formulärexporter från webbplatsen (boka demo, kontaktformulär, kontaktsida, offertförfrågan) i stället för en handgjord CSV. Testat 2026-10-07 på senaste veckans 17 förfrågningar (efter dubblettrensning):
+Läget "Formulärexporter" i appen: ladda upp webbplatsens råa formulärexporter (boka demo, kontaktformulär, kontaktsida, offertförfrågan) och välj period. Testat 2026-10-07 på senaste veckans förfrågningar (17 efter dubblettrensning, 6 tvillingsökta bolag, ~20 tic.io-anrop, 22 s):
 
 1. Koden läser alla fyra formaten, mappar kolumnerna (e-post- och meddelandefälten heter olika i varje export), slår ihop, tar bort dubbletter (samma e-post inom 10 min — samma förfrågan hamnar ofta i två formulär) och väljer datumintervall.
 2. Jev klassar varje förfrågan med Optimals erbjudande som kontext: typ (ny förfrågan / befintlig kund / säljer till Optimal / avregistrering / övrigt / oklart), avsändare (företag / förening / offentlig / privatperson) och om det är en mäklare. Klassningen stämde på alla 17 i testet.
 3. Bolaget identifieras: e-postdomänens stam söks hos bolagsdataapi (träffade ungefär hälften), annars tic.io-sökning på webbplats/e-post (`hyperlinks.hyperlink`, `emailAddresses.emailAddress`, 1 anrop, bara som reserv). Gratismejl: koden plockar ut namnkandidater ur meddelandet och Jev väljer. Inget säkert → "kontrollera manuellt".
-4. Bara nya förfrågningar från företag, föreningar och offentliga aktörer går vidare till tvillingsökningen. Privatpersoner, säljare, spam och oklara hoppas över med orsak. Mäklare är inte ett prioriterat segment för Optimal.
+4. Bara nya förfrågningar från företag, föreningar och offentliga aktörer går vidare till tvillingsökningen. Privatpersoner, säljare, spam, oklara, utländska domäner och befintliga kunder hoppas över med orsak. Mäklare hoppas över tills vidare (se nedan).
+5. En osäker bolagsmatchning (under 70 %) godtas inte när söktermen är gissad ur en förfrågan — då provas nästa sökväg, annars "kontrollera manuellt".
+
+Jev får en kort beskrivning av Optimals erbjudande (från skillsen `optimal-business-context` och `optimal-products`) som kontext, så att "vill köpa" skiljs från "säljer till oss".
 
 Personuppgifter: e-postadresser och telefonnummer rensas ur meddelandet innan det skickas till Jev; bara e-postdomänen skickas.
+
+## Senare: mäklare som tvillingkällor
+
+Mäklare hoppas över i dag. Idé: många små mäklarbyråer är säljbara kunder, men de stora kontoren är nyckelkunder och många använder andra system. Ett framtida läge kan tvillingsöka mäklarförfrågningar men exkludera befintliga kunder (inklusive deras franchisekontor) och större kontor.
 
 ## Senare: befintliga kunder som tvillingkällor (separat projekt)
 
@@ -89,6 +96,7 @@ Supportärendena i formulären (fel i order, inloggning, ändra tryckoriginal, b
 ## Kända begränsningar
 
 - tic.io:s filter släpper bara igenom bolag som har fältet: bolag utan omsättning hos tic.io kommer inte med i storleksfiltrerade sökningar.
-- tic.io:s nyckelordssökning kräver att alla ord matchar — därför ett enda ord.
+- tic.io:s nyckelordssökning kräver att alla ord matchar — därför ett enda ord. Ibland väljer Jev ett för allmänt ord (t.ex. "andel" för ett finansbolag) och nyckelordskandidaterna blir svaga.
+- bolagsdataapi returnerar ibland SNI 2025-koder; sökningen täcker båda systemen, men bolag som bara har den motsvarande 2007-koden kan missas.
 - Med många leads per körning kan Vercels tidsgräns (`maxDuration = 60` s) och tic.io:s 120 anrop/min bli begränsande.
 - foretagskontakt.se-integrationen är obekräftad och misslyckas tyst.

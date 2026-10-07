@@ -118,12 +118,21 @@ const procent = (p: number) => `${Math.round(p * 100)} %`;
 // Låter Jev välja vilken sökträff leadet avser. Returnerar index i hits, eller
 // null om Jev är säker på att ingen träff är rätt bolag. Misslyckas anropet
 // faller vi tillbaka på första träffen (det gamla beteendet) och säger det.
+// Underlag från en formulärförfrågan: meddelandet (utan personuppgifter) och
+// e-postdomänen. Hjälper Jev att skilja namnlika bolag åt (ort, signatur).
+export interface LeadKontext {
+  message: string;
+  email_domain: string | null;
+}
+
 async function pickSourceHit(
   companyName: string,
   candidates: Record<string, any>[],
-  typesafeKey: string | undefined
+  typesafeKey: string | undefined,
+  kontext?: LeadKontext
 ): Promise<{ index: number | null; matchning: string }> {
-  if (candidates.length === 1) return { index: 0, matchning: "enda träffen" };
+  // Med kontext (sökterm gissad ur en förfrågan) kan även en ensam träff vara fel.
+  if (candidates.length === 1 && !kontext) return { index: 0, matchning: "enda träffen" };
   if (!typesafeKey) return { index: 0, matchning: "första träffen (TYPESAFE_API_KEY saknas)" };
 
   const criteria: Record<string, string> = {};
@@ -140,19 +149,25 @@ async function pickSourceHit(
       headers: { Authorization: `Bearer ${typesafeKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "jev-latest",
-        state: { lead_name: companyName, candidates },
+        state: kontext ? { lead_name: companyName, lead_context: kontext, candidates } : { lead_name: companyName, candidates },
         questions: {
           kallbolag: {
             type: "choice",
             instructions: {
-              question:
-                "A Swedish salesperson listed `lead_name` as one of their business customers. " +
-                "`candidates` are search results from the Swedish company register. " +
-                "Which candidate is the company they most likely mean?",
+              question: kontext
+                ? "`lead_context` is an inquiry sent through a website form; `lead_name` is a search term taken from the " +
+                  "sender's email domain or message. `candidates` are search results from the Swedish company register. " +
+                  "Which candidate is the organisation that sent the inquiry? Use `lead_context.email_domain` and the " +
+                  "message (city, signature, what they do) to tell candidates apart."
+                : "A Swedish salesperson listed `lead_name` as one of their business customers. " +
+                  "`candidates` are search results from the Swedish company register. " +
+                  "Which candidate is the company they most likely mean?",
               guidance: [
                 "A subsidiary, property company or holding company that only shares the brand is not the same company as the group's main company named in `lead_name`.",
                 "Prefer the candidate whose name matches `lead_name` most closely, ignoring legal-form suffixes such as AB, (publ), HB, KB and differences in case, spacing or punctuation.",
-                "The lead is a business customer: prefer an active operating company over one that is dissolved, bankrupt, in liquidation or deregistered, and over housing cooperatives (bostadsrättsförening), non-profit associations, foundations or clubs that merely share the name.",
+                kontext
+                  ? "Prefer an active organisation over one that is dissolved, bankrupt, in liquidation or deregistered. The sender may be a company, an association or a public body - follow what the message says."
+                  : "The lead is a business customer: prefer an active operating company over one that is dissolved, bankrupt, in liquidation or deregistered, and over housing cooperatives (bostadsrättsförening), non-profit associations, foundations or clubs that merely share the name.",
                 "If both an operating company and its holding or parent company match, prefer the one with actual operations (revenue, employees).",
                 "Choose `ingen` only if no candidate is plausibly the same company.",
               ],
@@ -178,7 +193,9 @@ async function pickSourceHit(
     const finns: number = answers.finns_matchning.noul;
 
     if ((answers.kallbolag.choice === "ingen" && (probs.ingen ?? 0) >= INGEN_MATCHNING) || finns < 1 - INGEN_MATCHNING) {
-      const namn = candidates.map((c) => c.name ?? "?").join(", ");
+      const namn =
+        candidates.slice(0, 5).map((c) => c.name ?? "?").join(", ") +
+        (candidates.length > 5 ? ` m.fl. (${candidates.length} st)` : "");
       return {
         index: null,
         matchning: `Jev bedömde att ingen träff är leadet (${procent(Math.max(probs.ingen ?? 0, 1 - finns))}); träffar: ${namn}`,
@@ -190,6 +207,12 @@ async function pickSourceHit(
       if ((probs[`kandidat_${i}`] ?? 0) > (probs[`kandidat_${best}`] ?? 0)) best = i;
     });
     const p = probs[`kandidat_${best}`] ?? 0;
+    // Söktermen är bara gissad ur en förfrågan: hellre nästa sökväg (eller
+    // "kontrollera manuellt") än ett osäkert bolag. Tallnäs matchades annars
+    // mot en elfirma med "Tallner" i namnet.
+    if (kontext && p < SAKER_MATCHNING) {
+      return { index: null, matchning: `osäker träff (Jev ${procent(p)}: ${candidates[best]?.name ?? "?"})` };
+    }
     return {
       index: best,
       matchning: p >= SAKER_MATCHNING ? `Jev ${procent(p)}` : `osäker (Jev ${procent(p)}) – kontrollera`,
@@ -305,6 +328,35 @@ function applyTicSize(source: Company, ticSource: TicSource, doc: any): void {
   const profile = ticProfile(doc);
   if (!ticSource.profile.industry.length) ticSource.profile.industry = profile.industry;
   if (!ticSource.profile.employees) ticSource.profile.employees = profile.employees;
+  if (!ticSource.countyCode) {
+    const kod = docGet(doc, "registeredOfficeCountyCode");
+    if (kod !== null) ticSource.countyCode = Number(kod);
+  }
+}
+
+// Sista utvägen för en förfrågan: sök e-postdomänen bland bolagens webbplatser
+// och e-postadresser hos tic.io (hittade t.ex. "Tallnäs" för tallnas.se, där
+// å/ä/ö fallit bort ur domänen). Kostar ett tic.io-anrop.
+export async function resolveViaWebsite(
+  domain: string,
+  tic: Tic,
+  typesafeKey: string | undefined,
+  kontext: LeadKontext
+): Promise<SourceResult> {
+  const docs = await ticSearch(tic, {
+    q: domain,
+    query_by: "hyperlinks.hyperlink,emailAddresses.emailAddress",
+    per_page: TIC_NAME_SEARCH_LIMIT,
+  });
+  if (!docs.length) return { company: null, matchning: `inget bolag med webbplatsen ${domain} hos tic.io` };
+  const summaries = docs.map((d) => ({
+    ...ticCandidateSummary(d),
+    websites: (docGet(d, "hyperlinks") || []).map((l: any) => l.hyperlink).slice(0, 3),
+  }));
+  const { index, matchning } = await pickSourceHit(domain, summaries, typesafeKey, kontext);
+  if (index === null) return { company: null, matchning };
+  const company = companyFromTicDoc(docs[index], `${matchning} (via webbplats)`);
+  return { company, matchning: company.matchning!, ticSource: ticSourceFromDoc(docs[index], company) };
 }
 
 async function resolveViaTic(companyName: string, tic: Tic, typesafeKey?: string): Promise<SourceResult> {
@@ -328,10 +380,11 @@ async function bolagsdataGet(path: string, bolagsdataKey: string): Promise<any> 
   return resp.json();
 }
 
-async function resolveViaBolagsdata(
+export async function resolveViaBolagsdata(
   companyName: string,
   bolagsdataKey: string,
-  typesafeKey?: string
+  typesafeKey?: string,
+  kontext?: LeadKontext
 ): Promise<SourceResult> {
   const searchData = await bolagsdataGet(
     `/search?${new URLSearchParams({ q: namnUtanBolagsform(companyName), limit: String(SOURCE_SEARCH_LIMIT) })}`,
@@ -343,7 +396,7 @@ async function resolveViaBolagsdata(
   }
   if (!hits.length) return { company: null, matchning: "bolagsdataapi gav inga träffar på namnet" };
 
-  const { index, matchning } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey);
+  const { index, matchning } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey, kontext);
   if (index === null) return { company: null, matchning };
   return bolagsdataDetails(hits[index].org_nr, bolagsdataKey, hits[index], matchning);
 }
@@ -393,6 +446,7 @@ async function bolagsdataDetails(
     sni2007: new Set(sniCodes),
     sni2025: new Set(),
     county: company.lan ?? null,
+    countyCode: c.county_code ? Number(c.county_code) : null,
   };
   return { company, matchning, ticSource };
 }
@@ -635,6 +689,8 @@ export interface TicSource {
   sni2007: Set<string>;
   sni2025: Set<string>;
   county: string | null;
+  // SCB:s länskod (20 = Dalarna) - samma i bolagsdataapi och tic.io.
+  countyCode: number | null;
 }
 
 // Kallbolagets egen post hos tic.io: verksamhetsbeskrivning, SNI 2007 + 2025 och län.
@@ -667,7 +723,8 @@ function ticSourceFromDoc(sourceDoc: any, source: Company): TicSource {
     if (c.sni_2025Code) sni2025.add(c.sni_2025Code);
   }
   const county = sourceDoc ? docGet(sourceDoc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county") : null;
-  return { profile, sni2007, sni2025, county };
+  const countyCode = sourceDoc ? docGet(sourceDoc, "registeredOfficeCountyCode", "registeredOffices[0].countyCode") : null;
+  return { profile, sni2007, sni2025, county, countyCode: countyCode === null ? null : Number(countyCode) };
 }
 
 // --- Steg 2c: Jev fyller i lead-kolumner som lämnats tomma i CSV:n -------
@@ -854,7 +911,14 @@ export async function findTwins(
   // drar in tusentals orelaterade bolag; den som registrerat sig annorlunda
   // fångas i stället av nyckelordssökningen nedan.
   const huvudSni = source.sni_codes[0] || Array.from(sni2007)[0] || null;
-  const sniFilter = huvudSni ? `sniCodes.sni_2007Code:[${huvudSni}]` : null;
+  // bolagsdataapi ger ibland SNI 2025-koder (t.ex. 78201), så båda systemen söks.
+  let sniFilter: string | null = huvudSni
+    ? `(sniCodes.sni_2007Code:[${huvudSni}] || sniCodes.sni_2025Code:[${huvudSni}])`
+    : null;
+  // Län i själva sökningen när geografin är relevant - annars blir 50 slumpvisa
+  // bolag från hela landet ofta noll kvar efter länsfiltret (Devexa).
+  const lanFilter: string[] =
+    options.geografi_relevant && ticSource.countyCode ? [`registeredOfficeCountyCode:=${ticSource.countyCode}`] : [];
   const logg: Record<string, any> = { steg: "tvillingsökning", kallbolag: source.name, huvud_sni: huvudSni };
   const anropFore = tic.anrop;
 
@@ -870,6 +934,10 @@ export async function findTwins(
       })
     : [];
   const branschAntal = branschDocs.found ?? 0;
+  if (sniFilter && branschAntal === 0) {
+    logg.sni_utan_traffar = true;
+    sniFilter = null; // koden finns inte hos tic.io - lita på nyckelordssökningen
+  }
   const nisch = !!sniFilter && !options.storlek_strikt && branschAntal <= NISCH_MAX_BOLAG;
   logg.bransch_antal = branschAntal;
   logg.nisch = nisch;
@@ -892,14 +960,18 @@ export async function findTwins(
     ticSearch(tic, {
       q: "*",
       query_by: "registrationNumber",
-      filter_by: [sniFilter, ...sizeFilter].join(" && "),
+      filter_by: [sniFilter, ...sizeFilter, ...lanFilter].join(" && "),
       ...(sortBySize && sortField ? { sort_by: `${sortField}:desc` } : {}),
     });
 
   // Steg B: i en trång bransch används storleken. Nisch: steg A räcker (de
   // största bolagen i branschen = alla som spelar någon roll).
-  let sniDocs: TicHits = branschDocs;
-  if (sniFilter && !nisch && sizeFilters(WIDE_SIZE_FACTOR).length) {
+  let sniDocs: TicHits = sniFilter ? branschDocs : [];
+  if (sniFilter && nisch && lanFilter.length) {
+    // Nisch men lokal: hela branschen i länet, störst först.
+    sniDocs = await sniSearch([], true);
+    logg.sni_i_lanet = sniDocs.found ?? 0;
+  } else if (sniFilter && !nisch && sizeFilters(WIDE_SIZE_FACTOR).length) {
     sniDocs = await sniSearch(sizeFilters(WIDE_SIZE_FACTOR), false);
     logg.sni_inom_storlek = sniDocs.found ?? 0;
     if (!options.storlek_strikt && (sniDocs.found ?? 0) < MIN_SNI_POOL) {
@@ -951,13 +1023,16 @@ export async function findTwins(
 
   const urvalText = (medNyckelord: boolean) =>
     (!sniFilter
-      ? "ingen SNI-kod: bara nyckelordssökning"
+      ? logg.sni_utan_traffar
+        ? `SNI ${huvudSni} gav inga bolag hos tic.io: bara nyckelordssökning`
+        : "ingen SNI-kod: bara nyckelordssökning"
       : options.storlek_strikt
         ? `strikt storlek (${branschAntal} bolag med SNI ${huvudSni})`
         : nisch
           ? `nischbransch (${branschAntal} bolag med SNI ${huvudSni}): de största i branschen, storlek väger lätt`
           : `trång bransch (${branschAntal} bolag med SNI ${huvudSni}): urval på storlek` +
             (logg.sni_tak !== undefined ? ", närmast i storlek underifrån" : "")) +
+    (lanFilter.length ? `, bara ${ticSource.county || "samma län"}` : "") +
     (medNyckelord && logg.nyckelord ? ` + nyckelord "${logg.nyckelord}"` : "");
 
   // Utan Jev: ranka bara på storlek (bättre än tic.io:s godtyckliga ordning).
@@ -1041,7 +1116,10 @@ export async function findTwins(
       if (nyckelord) {
         // Nisch: ingen storleksgräns. Annars tak 3x: bästa textträff först,
         // sedan störst först (närmast i storlek underifrån).
-        const size = nisch ? [] : options.storlek_strikt ? sizeFilters(WIDE_SIZE_FACTOR) : sizeFilters(WIDE_SIZE_FACTOR, true);
+        const size = [
+          ...(nisch ? [] : options.storlek_strikt ? sizeFilters(WIDE_SIZE_FACTOR) : sizeFilters(WIDE_SIZE_FACTOR, true)),
+          ...lanFilter,
+        ];
         const purposeDocs = await ticSearch(tic, {
           q: nyckelord,
           query_by: "mostRecentPurpose",
