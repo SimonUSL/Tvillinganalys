@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ResultRow } from "./api/run/route";
 
 const EXEMPEL = `foretagsnamn,geografi_relevant,storlek_strikt,sasongseffekt
+SkiStar AB,,,
 Acme Bygg AB,ja,nej,
 Nordic Städ AB,nej,ja,jul`;
 
@@ -21,6 +22,7 @@ const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
   { key: "kontakt_namn", label: "Kontakt" },
   { key: "kontakt_mejl", label: "Mejl" },
   { key: "kontakt_telefon", label: "Telefon" },
+  { key: "geografi_relevant", label: "Geografi" },
   { key: "sasongseffekt", label: "Säsong" },
   { key: "tvilling_verksamhet", label: "Verksamhet" },
   { key: "status", label: "Status" },
@@ -123,8 +125,9 @@ export default function Home() {
           Tvillinganalys
         </h1>
         <p style={{ color: "#64646A", marginTop: 0, marginBottom: 24, fontSize: 14 }}>
-          Klistra in leads.csv nedan (kolumner: foretagsnamn, geografi_relevant,
-          storlek_strikt, sasongseffekt) och kör sökningen.
+          Klistra in leads.csv nedan och kör sökningen. Bara foretagsnamn krävs. Lämnar du
+          geografi_relevant eller sasongseffekt tomma gissar Jev dem utifrån bolagets
+          verksamhet; ifyllda värden gäller alltid (skriv &quot;ingen&quot; för ingen säsong).
         </p>
 
         <textarea

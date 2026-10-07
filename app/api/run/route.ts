@@ -2,13 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   Company,
   LeadOptions,
+  TicSource,
   Twin,
   arJa,
   enrichContact,
+  fetchTicSource,
   findTwins,
+  guessLeadOptions,
   resolveSourceCompany,
 } from "@/lib/twinfinder";
 import { parseCsv } from "@/lib/csv";
+
+// Säsongsceller som betyder "ingen säsong" (och inte ska gissas av Jev).
+const INGEN_SASONG = new Set(["nej", "ingen", "-", "no", "none"]);
 
 export const maxDuration = 60; // försök be om längre körningstid på Vercel
 
@@ -77,15 +83,10 @@ export async function POST(req: NextRequest) {
     const companyName = (lead.foretagsnamn || "").trim();
     if (!companyName) continue;
 
-    const options: LeadOptions = {
-      geografi_relevant: arJa(lead.geografi_relevant),
-      storlek_strikt: arJa(lead.storlek_strikt),
-      sasongseffekt: (lead.sasongseffekt || "").trim(),
-    };
-
     let source: Company | null = null;
+    let matchning = "";
     try {
-      source = await resolveSourceCompany(companyName, bolagsdataKey, typesafeKey);
+      ({ company: source, matchning } = await resolveSourceCompany(companyName, bolagsdataKey, typesafeKey));
     } catch (e: any) {
       rowsOut.push({
         lead_foretagsnamn: companyName,
@@ -95,7 +96,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!source) {
-      rowsOut.push({ lead_foretagsnamn: companyName, status: "ej hittat" });
+      rowsOut.push({ lead_foretagsnamn: companyName, kall_matchning: matchning, status: `ej hittat: ${matchning}` });
       continue;
     }
     if (!source.sni_codes?.length) {
@@ -109,21 +110,60 @@ export async function POST(req: NextRequest) {
       continue;
     }
 
-    const gemensam = {
+    const gemensamGrund = {
       lead_foretagsnamn: companyName,
       kall_org_nr: source.org_nr,
       kall_namn: source.name,
       kall_sni: source.sni_codes.join(";"),
       kall_lan: source.lan,
       kall_matchning: source.matchning,
-      geografi_relevant: options.geografi_relevant ? "ja" : "nej",
+    };
+
+    let ticSource: TicSource;
+    try {
+      ticSource = await fetchTicSource(source, ticKey);
+    } catch (e: any) {
+      rowsOut.push({ ...gemensamGrund, status: `fel vid tic.io-sökning: ${e.message || e}` });
+      continue;
+    }
+
+    // Ifyllda CSV-celler gäller. Tomma geografi/säsong-celler gissar Jev
+    // utifrån kallbolagets verksamhetsbeskrivning.
+    const geoCell = (lead.geografi_relevant || "").trim();
+    const sasongCell = (lead.sasongseffekt || "").trim();
+    const options: LeadOptions = {
+      geografi_relevant: arJa(geoCell),
+      storlek_strikt: arJa(lead.storlek_strikt),
+      sasongseffekt: INGEN_SASONG.has(sasongCell.toLowerCase()) ? "" : sasongCell,
+    };
+    let geografiInfo = geoCell ? (options.geografi_relevant ? "ja" : "nej") : "nej";
+    let sasongInfo = sasongCell;
+    if ((!geoCell || !sasongCell) && typesafeKey) {
+      try {
+        const gissning = await guessLeadOptions(ticSource.profile, typesafeKey);
+        if (!geoCell) {
+          options.geografi_relevant = gissning.geografi_relevant;
+          geografiInfo = gissning.geografi_info;
+        }
+        if (!sasongCell) {
+          options.sasongseffekt = gissning.sasongseffekt;
+          sasongInfo = gissning.sasong_info;
+        }
+      } catch (e: any) {
+        if (!geoCell) geografiInfo = `nej (Jev-fel: ${e.message || e})`;
+      }
+    }
+
+    const gemensam = {
+      ...gemensamGrund,
+      geografi_relevant: geografiInfo,
       storlek_strikt: options.storlek_strikt ? "ja" : "nej",
-      sasongseffekt: options.sasongseffekt,
+      sasongseffekt: sasongInfo,
     };
 
     let twins: Twin[] = [];
     try {
-      twins = await findTwins(source, options, ticKey, knownCustomerOrgNrs, typesafeKey);
+      twins = await findTwins(source, ticSource, options, ticKey, knownCustomerOrgNrs, typesafeKey);
     } catch (e: any) {
       rowsOut.push({ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` });
       continue;

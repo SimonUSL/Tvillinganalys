@@ -64,7 +64,7 @@ const MAX_TWINS_PER_LEAD = 10;
 
 // Steg 2b: TypeSafe Jev väljer vilket av bolagsdataapi:s sökträffar leadet avser.
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
-const SOURCE_SEARCH_LIMIT = 10;
+const SOURCE_SEARCH_LIMIT = 5; // 10 gav "ej hittat" på SkiStar - 5 är beprövat
 // Under denna sannolikhet används Jevs val ändå, men markeras som osäkert.
 export const SAKER_MATCHNING = 0.7;
 // Jev måste vara så här säker på "ingen" för att leadet ska räknas som ej hittat.
@@ -170,7 +170,11 @@ async function pickSourceHit(
     const finns: number = answers.finns_matchning.noul;
 
     if ((answers.kallbolag.choice === "ingen" && (probs.ingen ?? 0) >= INGEN_MATCHNING) || finns < 1 - INGEN_MATCHNING) {
-      return { index: null, matchning: `ingen träff är samma bolag (Jev ${procent(Math.max(probs.ingen ?? 0, 1 - finns))})` };
+      const namn = candidates.map((c) => c.name ?? "?").join(", ");
+      return {
+        index: null,
+        matchning: `Jev bedömde att ingen träff är leadet (${procent(Math.max(probs.ingen ?? 0, 1 - finns))}); träffar: ${namn}`,
+      };
     }
     // Bästa riktiga kandidat, även när "ingen" vann med liten marginal.
     let best = 0;
@@ -187,11 +191,17 @@ async function pickSourceHit(
   }
 }
 
+// company är null när leadet inte kunde knytas till ett bolag; matchning säger varför.
+export interface SourceResult {
+  company: Company | null;
+  matchning: string;
+}
+
 export async function resolveSourceCompany(
   companyName: string,
   bolagsdataKey: string,
   typesafeKey?: string
-): Promise<Company | null> {
+): Promise<SourceResult> {
   const searchUrl = `${BOLAGSDATA_BASE}/search?${new URLSearchParams({
     q: companyName,
     limit: String(SOURCE_SEARCH_LIMIT),
@@ -209,10 +219,10 @@ export async function resolveSourceCompany(
   if (!Array.isArray(hits)) {
     throw new Error(`okänt svarsformat, fält: ${Object.keys(searchData || {}).join(", ")}`);
   }
-  if (!hits.length) return null;
+  if (!hits.length) return { company: null, matchning: "bolagsdataapi gav inga träffar på namnet" };
 
   const { index, matchning } = await pickSourceHit(companyName, hits, typesafeKey);
-  if (index === null) return null;
+  if (index === null) return { company: null, matchning };
   const top = hits[index];
   const orgNr = top.org_nr;
   let details: any = {};
@@ -231,7 +241,7 @@ export async function resolveSourceCompany(
     .filter(Boolean);
   const sniCodes = sniFromDetails.length ? sniFromDetails : [top.sni_code].filter(Boolean);
 
-  return {
+  const company: Company = {
     org_nr: orgNr,
     name: top.name || companyName,
     net_revenue: top.net_revenue ?? null,
@@ -241,6 +251,7 @@ export async function resolveSourceCompany(
     ort: top.ort ?? null,
     matchning,
   };
+  return { company, matchning };
 }
 
 // --- Steg 3-4: hitta och ranka tvillingar ---------------------------------
@@ -275,7 +286,7 @@ export interface Twin extends Company {
   poang?: number | null;
 }
 
-interface TicProfile {
+export interface TicProfile {
   name: string;
   business_description: string | null;
   industry: string[];
@@ -424,22 +435,21 @@ async function judgeCandidate(
   };
 }
 
-export async function findTwins(
-  source: Company,
-  options: LeadOptions,
-  ticKey: string,
-  excludeOrgNrs: Set<string>,
-  typesafeKey?: string
-): Promise<Twin[]> {
-  const sourceOrgNr = normOrgNr(source.org_nr);
+export interface TicSource {
+  profile: TicProfile;
+  sni2007: Set<string>;
+  sni2025: Set<string>;
+  county: string | null;
+}
 
-  // Kallbolagets egen post hos tic.io: verksamhetsbeskrivning och SNI 2007 + 2025.
+// Kallbolagets egen post hos tic.io: verksamhetsbeskrivning, SNI 2007 + 2025 och län.
+export async function fetchTicSource(source: Company, ticKey: string): Promise<TicSource> {
   const [sourceDoc] = await ticSearch(ticKey, {
-    q: sourceOrgNr,
+    q: normOrgNr(source.org_nr),
     query_by: "registrationNumber",
     per_page: 1,
   });
-  const sourceProfile: TicProfile = sourceDoc
+  const profile: TicProfile = sourceDoc
     ? ticProfile(sourceDoc)
     : {
         name: source.name,
@@ -457,6 +467,87 @@ export async function findTwins(
     if (c.sni_2007Code) sni2007.add(c.sni_2007Code);
     if (c.sni_2025Code) sni2025.add(c.sni_2025Code);
   }
+  const county = sourceDoc ? docGet(sourceDoc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county") : null;
+  return { profile, sni2007, sni2025, county };
+}
+
+// --- Steg 2c: Jev fyller i lead-kolumner som lämnats tomma i CSV:n -------
+
+export const SASONGER: Record<string, string> = {
+  ingen:
+    "No strong seasonal peak: demand is fairly even over the year. This fits most businesses, e.g. plumbers, electricians and other trades, accounting, software and most business-to-business services.",
+  vinter: "Demand peaks in winter, e.g. ski resorts, snow clearing, heating services.",
+  sommar: "Demand peaks in summer, e.g. campsites, boat rentals, ice cream, garden maintenance.",
+  jul: "Demand peaks around Christmas and year-end shopping, e.g. gift retail, Christmas events and catering.",
+  var: "Demand peaks in spring, e.g. garden centres, bicycle shops, boat and garden supplies.",
+  host: "Demand peaks in autumn, e.g. hunting supplies, harvest-related services.",
+};
+// Lägsta sannolikhet för att en säsong (annan än "ingen") ska användas.
+const MIN_SASONG = 0.5;
+// Över denna sannolikhet räknas bolaget som lokalt/regionalt -> geografi_relevant.
+const MIN_LOKAL = 0.5;
+
+export interface LeadGissning {
+  geografi_relevant: boolean;
+  geografi_info: string;
+  sasongseffekt: string; // "" = ingen säsong
+  sasong_info: string;
+}
+
+export async function guessLeadOptions(profile: TicProfile, typesafeKey: string): Promise<LeadGissning> {
+  const resp = await fetch(TYPESAFE_URL, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${typesafeKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "jev-latest",
+      state: { company: profile },
+      questions: {
+        lokal: {
+          type: "noul",
+          instructions:
+            "Does `company` mainly serve customers in its own local area or region, rather than customers " +
+            "across all of Sweden or abroad? Judge from `business_description`, `industry` and `name`.",
+          criteria: {
+            true: "A local or regional business, e.g. a plumber, a local cleaning company, a regional builder, a restaurant or a local gym.",
+            false: "Serves customers nationally or internationally, e.g. a software company, a manufacturer selling across the country, or a destination such as a ski resort that draws visitors from the whole country.",
+          },
+        },
+        sasong: {
+          type: "choice",
+          instructions:
+            "When in the year does demand for the business of `company` peak? Choose a season only if a large share " +
+            "of its yearly sales clearly falls in that season; otherwise choose `ingen`. Judge from `business_description`, `industry` and `name`.",
+          criteria: SASONGER,
+        },
+      },
+    }),
+  });
+  if (!resp.ok) throw new Error(`Jev ${resp.status}: ${(await resp.text()).slice(0, 120)}`);
+  const a = (await resp.json()).answers;
+  const lokal: number = a.lokal.noul;
+  const sasong: string = a.sasong.choice;
+  const pSasong: number = a.sasong.probabilities?.[sasong] ?? 0;
+  const anvandSasong = sasong !== "ingen" && pSasong >= MIN_SASONG;
+  return {
+    geografi_relevant: lokal >= MIN_LOKAL,
+    geografi_info: `${lokal >= MIN_LOKAL ? "ja" : "nej"} (Jev: lokalt bolag ${procent(lokal)})`,
+    sasongseffekt: anvandSasong ? sasong : "",
+    sasong_info: anvandSasong ? `${sasong} (Jev ${procent(pSasong)})` : `ingen (Jev)`,
+  };
+}
+
+export async function findTwins(
+  source: Company,
+  ticSource: TicSource,
+  options: LeadOptions,
+  ticKey: string,
+  excludeOrgNrs: Set<string>,
+  typesafeKey?: string
+): Promise<Twin[]> {
+  const sourceOrgNr = normOrgNr(source.org_nr);
+  const { profile: sourceProfile, sni2007, sni2025 } = ticSource;
+  // Jämför län med samma källa (tic.io) på båda sidor när det går.
+  const sourceLan = ticSource.county ?? source.lan;
 
   // Storleksfilter hos tic.io. Strikt läge behåller de snäva gränserna,
   // annars ett brett intervall - rankingen sköter resten.
@@ -525,7 +616,7 @@ export async function findTwins(
 
     const candLan = docGet(doc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county", "lan");
     if (options.geografi_relevant) {
-      if (source.lan && candLan && candLan.trim().toLowerCase() !== source.lan.trim().toLowerCase()) {
+      if (sourceLan && candLan && candLan.trim().toLowerCase() !== sourceLan.trim().toLowerCase()) {
         continue;
       }
     }
