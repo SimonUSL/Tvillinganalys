@@ -65,8 +65,6 @@ export function storleksklass(employees: number): [string, number, number | null
 const BOLAGSDATA_BASE = "https://bolagsdataapi.se/api/v1";
 const TIC_SEARCH_URL = "https://lens-api.tic.io/search-public/companies";
 const TIC_MAX_PER_PAGE = 50;
-const FORETAGSKONTAKT_URL =
-  "https://www.xn--fretagskontakt-vpb.se/api/verifiera-foretagsuppgifter"; // OBEKRAFTAD
 const MAX_TWINS_PER_LEAD = 10;
 
 // Steg 2b: TypeSafe Jev väljer vilken namnträff leadet avser.
@@ -1519,22 +1517,4 @@ async function dropSameGroup(
     }
   });
   return { kvar, borttagna };
-}
-
-export async function enrichContact(company: Company, foretagskontaktKey: string): Promise<void> {
-  try {
-    const resp = await fetch(
-      `${FORETAGSKONTAKT_URL}?${new URLSearchParams({ org_nr: company.org_nr })}`,
-      { headers: { Authorization: `Bearer ${foretagskontaktKey}` } }
-    );
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const person = data.decision_maker || data.beslutsfattare || {};
-    company.contact_name = person.name ?? null;
-    company.contact_email = person.email ?? null;
-    company.contact_phone = person.phone ?? null;
-  } catch {
-    // foretagskontakt.se är OBEKRÄFTAD - misslyckas tyst, lead får statusen
-    // "tvilling hittad (ingen kontakt)" istället för att krascha hela körningen.
-  }
 }

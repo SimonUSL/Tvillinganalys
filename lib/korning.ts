@@ -1,6 +1,7 @@
 // korning.ts — flödet för ett lead: hitta bolaget, gissa geografi/säsong,
 // sök tvillingar. Delas av verktyget (/api/run) och Webflow-webhooken.
 
+import { berikaKontakt } from "./foretagskontakt";
 import {
   Company,
   LeadOptions,
@@ -9,7 +10,6 @@ import {
   TicSource,
   Twin,
   arJa,
-  enrichContact,
   fetchTicSource,
   findTwins,
   guessLeadOptions,
@@ -179,10 +179,13 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   if (!twins.length) return [{ ...gemensam, ...urvalFalt, status_kod: "inga_tvillingar", status: "inga tvillingar hittade" }];
 
   const rows: ResultRow[] = [];
+  // Företagskontakt: köp bara det registren saknar (se lib/foretagskontakt.ts).
+  if (foretagskontaktKey) {
+    let kr = 0;
+    for (const twin of twins) kr += await berikaKontakt(twin, foretagskontaktKey);
+    console.log(JSON.stringify({ steg: "foretagskontakt", kallbolag: source.name, tvillingar: twins.length, kostnad_kr: Math.round(kr * 100) / 100 }));
+  }
   for (const twin of twins) {
-    if (foretagskontaktKey) {
-      await enrichContact(twin, foretagskontaktKey);
-    }
     rows.push({
       ...gemensam,
       ...urvalFalt,
