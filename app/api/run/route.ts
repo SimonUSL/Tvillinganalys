@@ -66,7 +66,7 @@ export async function POST(req: NextRequest) {
     await markeraOchKomIhag(rader);
     await sparaKorning(rader, kalla);
     if (kalla === "granska" && rader.some((r) => r.tvilling_namn)) {
-      const svar = await skickaTvillingMejl(rader).catch((e) => ({ skickat: false, fel: String(e?.message || e) }));
+      const svar = await skickaTvillingMejl(rader, true).catch((e) => ({ skickat: false, fel: String(e?.message || e) }));
       console.log(JSON.stringify({ steg: "granska-mejl", bolag: rader[0].kall_namn, skickat: svar.skickat, fel: svar.fel }));
     }
   };

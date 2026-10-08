@@ -105,15 +105,16 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
 // Mejlet med tvillingarna till säljarna (MAIL_TO). Används av automatiken och
 // när en förfrågan körs från Granska. Samma bolag mejlas sedan inte automatiskt
 // igen på AUTO_SAMMA_BOLAG_DAGAR.
-export async function skickaTvillingMejl(rows: ResultRow[]): Promise<{ skickat: boolean; fel?: string }> {
+// granskad: förfrågan har gått via Granska, vilket syns i ämne och mejl.
+export async function skickaTvillingMejl(rows: ResultRow[], granskad = false): Promise<{ skickat: boolean; fel?: string }> {
   const forsta = rows[0];
   const tvillingar = rows.filter((x) => x.tvilling_namn);
   if (!forsta || !tvillingar.length) return { skickat: false, fel: "inga tvillingar" };
   const namn = forsta.kall_namn || forsta.lead_foretagsnamn;
   const svar = await skickaMejl({
     till: mottagare(),
-    amne: `Förslag på tvillingar: ${namn} (${tvillingar.length} bolag)`,
-    html: tvillingMejl(rows),
+    amne: `Förslag på tvillingar: ${namn} (${tvillingar.length} bolag)${granskad ? " – efter manuell granskning" : ""}`,
+    html: tvillingMejl(rows, granskad),
     bilagor: [{ filnamn: `tvillingar-${slug(namn)}.csv`, innehall: "\uFEFF" + byggCsv(rows) }],
   });
   if (svar.skickat && forsta.kall_org_nr) await cacheSet(`auto:bolag:${forsta.kall_org_nr}`, 1, AUTO_SAMMA_BOLAG_DAGAR);
@@ -195,7 +196,7 @@ function kontaktCell(t: ResultRow): string {
   return delar.length ? delar.join("<br>") : "–";
 }
 
-function tvillingMejl(rows: ResultRow[]): string {
+function tvillingMejl(rows: ResultRow[], granskad = false): string {
   const forsta = rows[0];
   const avs: Avsandare = {
     namn: forsta.forfragan_namn,
@@ -225,7 +226,10 @@ function tvillingMejl(rows: ResultRow[]): string {
     .join("");
   const th = (s: string, hoger = false) =>
     `<th style="text-align:${hoger ? "right" : "left"};padding:8px;border-bottom:2px solid #2b2b2b;font-size:12px">${s}</th>`;
-  return RAM(`<h1 style="font-size:20px;margin:0 0 6px">${esc(forsta.kall_namn)} – ${tvillingar.length} liknande bolag</h1>
+  const granskadRad = granskad
+    ? `<p style="display:inline-block;margin:0 0 10px;background:#fff4e0;color:#8a5a00;font-size:13px;font-weight:bold;padding:4px 10px;border-radius:6px">Efter manuell granskning – förfrågan kom in tidigare och bolaget har fyllts i eller rättats för hand.</p>`
+    : "";
+  return RAM(`${granskadRad}<h1 style="font-size:20px;margin:0 0 6px">${esc(forsta.kall_namn)} – ${tvillingar.length} liknande bolag</h1>
 ${kalla || forsta.kall_lan ? `<p style="margin:0;color:#4a4a50;font-size:14px">${esc(kalla)}${forsta.kall_lan ? ` · ${esc(forsta.kall_lan)}` : ""}</p>` : ""}
 ${avs.namn || avs.epost || avs.telefon || avs.meddelande ? citat(avs) : ""}
 ${fakta ? `<p style="font-size:13px;color:#4a4a50;margin:0 0 12px">${esc(fakta)}</p>` : ""}
