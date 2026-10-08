@@ -62,6 +62,9 @@ export interface ResultRow {
   forfragan_namn?: string | null;
   forfragan_epost?: string | null;
   forfragan_telefon?: string | null;
+  // Tvillingen föreslogs redan (inom 90 dagar) till ett annat bolag, se lib/historik.ts.
+  tidigare_datum?: string | null;
+  tidigare_kallbolag?: string | null;
   kontakt_namn?: string | null;
   kontakt_mejl?: string | null;
   kontakt_telefon?: string | null;

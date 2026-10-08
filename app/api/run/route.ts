@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { namnUtanBolagsform, ticKlient } from "@/lib/twinfinder";
 import { parseCsv } from "@/lib/csv";
 import { Ctx, ResultRow, processLead } from "@/lib/korning";
+import { KorningsKalla, markeraOchKomIhag, sparaKorning } from "@/lib/historik";
+import { skickaTvillingMejl } from "@/lib/automatik";
 
 export type { ResultRow } from "@/lib/korning";
 
@@ -57,6 +59,17 @@ export async function POST(req: NextRequest) {
   };
   const rowsOut: ResultRow[] = [];
   const sedda = new Set<string>();
+  // "granska": körningen kommer från granskningskön och ska mejlas som de automatiska.
+  const kalla: KorningsKalla = body.kalla === "granska" ? "granska" : "verktyg";
+  // Varje leads resultat sparas i historiken; tvillingar som föreslagits förut märks.
+  const efterLead = async (rader: ResultRow[]) => {
+    await markeraOchKomIhag(rader);
+    await sparaKorning(rader, kalla);
+    if (kalla === "granska" && rader.some((r) => r.tvilling_namn)) {
+      const svar = await skickaTvillingMejl(rader).catch((e) => ({ skickat: false, fel: String(e?.message || e) }));
+      console.log(JSON.stringify({ steg: "granska-mejl", bolag: rader[0].kall_namn, skickat: svar.skickat, fel: svar.fel }));
+    }
+  };
 
   if (Array.isArray(body.leads)) {
     // --- Granskade leads (formulärexporter eller CSV) från gränssnittet.
@@ -80,6 +93,7 @@ export async function POST(req: NextRequest) {
             { namn: namn || orgNr, orgNr, geo: lead.geo, sasong: lead.sasong, strikt: lead.strikt, extra: lead.extra },
             ctx
           );
+          await efterLead(rader);
         }
         skicka({ typ: "rader", rows: rader });
       }
@@ -130,12 +144,12 @@ export async function POST(req: NextRequest) {
         continue;
       }
       sedda.add(leadNyckel);
-      rowsOut.push(
-        ...(await processLead(
-          { namn, orgNr, geo: lead.geografi_relevant, sasong: lead.sasongseffekt, strikt: lead.storlek_strikt },
-          ctx
-        ))
+      const rader = await processLead(
+        { namn, orgNr, geo: lead.geografi_relevant, sasong: lead.sasongseffekt, strikt: lead.storlek_strikt },
+        ctx
       );
+      await efterLead(rader);
+      rowsOut.push(...rader);
     }
   }
 

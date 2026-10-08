@@ -105,3 +105,19 @@ export function likhetText(t?: string | null): string {
   const s = t.replace(/\s*\(.*\)$/, "");
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+// "2026-10-03" -> "3 okt"
+export const kortDatum = (iso: string) =>
+  new Date(iso.length === 10 ? `${iso}T12:00:00` : iso).toLocaleDateString("sv-SE", { day: "numeric", month: "short" }).replace(/\.$/, "");
+
+// Tvillingen har redan föreslagits till ett annat bolag (inom 90 dagar).
+export function tidigareText(r: { tidigare_datum?: string | null; tidigare_kallbolag?: string | null }): string {
+  if (!r.tidigare_datum) return "";
+  return `Föreslogs ${kortDatum(r.tidigare_datum)}${r.tidigare_kallbolag ? ` (till ${r.tidigare_kallbolag})` : ""}`;
+}
+
+export const KALLA_TEXT: Record<string, string> = {
+  automatik: "Automatiskt",
+  verktyg: "I verktyget",
+  granska: "Från Granska",
+};

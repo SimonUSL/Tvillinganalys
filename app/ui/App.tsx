@@ -8,11 +8,9 @@ import { parseCsv } from "@/lib/csv";
 import Underlag, { CSV_EXEMPEL, isoDag } from "./Underlag";
 import Granska, { harBolag } from "./Granska";
 import Resultat from "./Resultat";
+import Sidhuvud from "./Sidhuvud";
 import type { Kalla, Korning, Rad, Steg } from "./typer";
 import { GRANSKA_ORSAK, forfraganEtikett } from "./klartext";
-
-const LOGO_SRC =
-  "https://cdn.prod.website-files.com/5dd4488fdda3ce628d8173ce/5ddfe48c64e4a62b7bd48be9_optimal_kommunikation_logo.svg";
 
 const STEG: { id: Steg; text: string }[] = [
   { id: "underlag", text: "Underlag" },
@@ -25,7 +23,6 @@ const STEG: { id: Steg; text: string }[] = [
 // ko: granskningskön (/granska) - automatiska förfrågningar som behöver en människa.
 export default function App({ admin = false, ko = false }: { admin?: boolean; ko?: boolean }) {
   const [steg, setSteg] = useState<Steg>(ko ? "granska" : "underlag");
-  const [koAntal, setKoAntal] = useState(0);
   const [koLaddad, setKoLaddad] = useState(!ko);
   const [kalla, setKalla] = useState<Kalla>("export");
   const [filer, setFiler] = useState<{ name: string; text: string }[]>([]);
@@ -109,15 +106,9 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
     }
   }
 
-  // Granskningskön: hämta posterna. Annars: hur många som väntar (länk i sidhuvudet).
+  // Granskningskön: hämta posterna.
   useEffect(() => {
-    if (!ko) {
-      fetch("/api/granska?antal=1")
-        .then((r) => r.json())
-        .then((d) => setKoAntal(d.antal || 0))
-        .catch(() => {});
-      return;
-    }
+    if (!ko) return;
     fetch("/api/granska")
       .then((r) => r.json())
       .then((d) => {
@@ -138,6 +129,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
             text: p.text,
             orsak: GRANSKA_ORSAK[p.orsak_kod],
             avsandare: [p.namn, p.epost, p.telefon].filter(Boolean).join(" · "),
+            avsandare_falt: { namn: p.namn, epost: p.epost, telefon: p.telefon },
             forslag: p.forslag ?? undefined,
           }))
         );
@@ -165,6 +157,8 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           stream: true,
+          // Från granskningskön: resultatet mejlas till säljarna som de automatiska.
+          kalla: ko ? "granska" : "verktyg",
           // Kunden ser inte taket; standardtaket gäller då alltid.
           max_tic_anrop: admin && maxTic.trim() !== "" ? Number(maxTic) : standardTak,
           leads: leads.map((r) => ({
@@ -182,6 +176,9 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
                     forfragan_doman: r.doman,
                     forfragan_typ: admin ? r.typ : forfraganEtikett(r.typ_kod, r.avsandare_kod),
                     forfragan_text: r.text,
+                    forfragan_namn: r.avsandare_falt?.namn || null,
+                    forfragan_epost: r.avsandare_falt?.epost || null,
+                    forfragan_telefon: r.avsandare_falt?.telefon || null,
                   }
                 : {}),
             },
@@ -244,10 +241,6 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
     setSteg("underlag");
   }
 
-  async function loggaUt() {
-    await fetch("/api/logout", { method: "POST" });
-    window.location.href = admin ? "/admin/login" : "/login";
-  }
 
   const stegLista = ko ? STEG.filter((s) => s.id !== "underlag") : STEG;
   const stegIndex = stegLista.findIndex((s) => s.id === steg);
@@ -269,26 +262,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
 
   return (
     <>
-      <header className="app-header">
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <img src={LOGO_SRC} alt="Optimal Kommunikation" />
-          {admin && <span className="badge badge-accent">Admin</span>}
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {ko ? (
-            <a className="btn-link" href={admin ? "/admin" : "/"}>
-              Till verktyget
-            </a>
-          ) : (
-            <a className="btn-link" href={admin ? "/admin/granska" : "/granska"}>
-              Granska{koAntal ? ` (${koAntal})` : ""}
-            </a>
-          )}
-          <button type="button" className="btn-link" onClick={loggaUt}>
-            Logga ut
-          </button>
-        </div>
-      </header>
+      <Sidhuvud admin={admin} vy={ko ? "granska" : "verktyg"} />
       <main className="app-main">
         <nav aria-label="Steg">
           <ol className="stepper">

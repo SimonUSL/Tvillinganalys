@@ -15,10 +15,18 @@ Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas a
 Varje formulärinskick på webbplatsen skickas av Webflow till `/api/webflow?nyckel=<WEBFLOW_WEBHOOK_SECRET>` (Webflow → Site settings → Apps & integrations → Webhooks → *Form submission*). Appen svarar direkt och arbetar sedan i bakgrunden:
 
 - **Inte värd att söka på** (befintlig kund, mäklare, privatperson, spam, oklar, utländsk): inget mejl, bara en loggrad.
-- **Osäkert bolag, inga tvillingar eller fel:** förfrågan läggs i **granskningskön** (`/granska`, `lib/granskning.ts`, Redis-hashen `granska:poster`) och mejlet "Att granska: ny förfrågan från …" säger varför, med knappen *Granska i Tvillinganalys*. På `/granska` fyller man i eller rättar bolaget och kör tvillingsökningen; leads som får tvillingar tas bort ur kön, och poster kan tas bort för hand. Poster äldre än 60 dagar rensas (de innehåller personuppgifter). Sidhuvudet visar "Granska (N)".
+- **Osäkert bolag, inga tvillingar eller fel:** förfrågan läggs i **granskningskön** (`/granska`, `lib/granskning.ts`, Redis-hashen `granska:poster`) och mejlet "Att granska: ny förfrågan från …" säger varför, med knappen *Granska i Tvillinganalys*. På `/granska` fyller man i eller rättar bolaget och kör tvillingsökningen; resultatet mejlas till `MAIL_TO` precis som de automatiska ("Förslag på tvillingar …", `skickaTvillingMejl`), och leads som får tvillingar tas bort ur kön, och poster kan tas bort för hand. Poster äldre än 60 dagar rensas (de innehåller personuppgifter). Sidhuvudet visar "Granska (N)".
 - **Bolaget hittat:** tvillingsökning (högst 4 tic.io-anrop) och mejl "Förslag på tvillingar: X (N bolag)" med tabell och Excel-bilaga till `MAIL_TO`.
 - Samma inskick hanteras en gång (7 dagar), samma bolag får tvillingar högst en gång per 30 dagar (kräver Redis-cachen).
 - Mejlet innehåller hela förfrågan (avsändarens namn, e-post, telefon, meddelande) och för varje tvilling kontaktuppgifter ur registren (`lib/kontakt.ts`): beslutsfattare med roll (VD, ordförande, innehavare, delägare, styrelseledamot – från tic.io, aldrig personnummer eller skyddade identiteter), bolagets e-post (egen domän först), telefon och webbplats. Tvillingar från bolagsdataapi får beslutsfattare via ett gemensamt tic.io-anrop (upp till 10 bolag). Företagskontakt (`lib/foretagskontakt.ts`, när `FORETAGSKONTAKT_API_KEY` finns) köper bara det registren saknar: beslutsfattarens personliga e-post + direkttelefon alltid, info@-adressen bara om registren saknade e-post **och** Företagskontakt varken gav personlig e-post eller direkttelefon. Kostnaden per lead loggas (`"steg":"foretagskontakt"`, `kostnad_kr`). Själva API-anropet (`fragaForetagskontakt`) är byggt på antaganden och anpassas när dokumentationen finns.
+
+## Historik — `/historik`, `lib/historik.ts`, `app/api/historik`
+
+Varje körning sparas i Redis i **12 månader**: automatiska (med tvillingar), i verktyget och från Granska. En körning = ett bolag: förfrågan, avsändare, bolaget och tvillingarna med kontaktuppgifter. Nycklar: `historik:korning:<id>` (hela körningen, går ut efter 365 dagar), hashen `historik:samman` (sammanfattningar för listan) och sorted set `historik:index` (tid → id; gamla rensas när listan hämtas).
+
+- **`/historik`** (och `/admin/historik`): lista med sök (bolag, org.nr, avsändare), filter på källa och "bara med tvillingar". *Visa* öppnar körningen med tvillingtabellen och CSV-nedladdning.
+- **Redan föreslagna tvillingar märks**, de tas inte bort: varje föreslagen tvilling minns i 90 dagar (`historik:foreslagen:<orgnr>` → datum + vilket bolag den föreslogs till). Föreslås den igen till ett *annat* bolag får raden `tidigare_datum`/`tidigare_kallbolag` och visas som "Föreslogs 3 okt (till SkiStar AB)" i verktyget, mejlet och CSV:n (kolumnen *Föreslogs tidigare*). Datumet pekar på första gången.
+- Utan Redis (lokalt) sparas historiken i minnet.
 
 Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifierad i Resend). Saknas `RESEND_API_KEY` loggas mejlen bara (torrkörning). Lokalt sparar `MAIL_TORR_MAPP=<mapp>` mejlen som HTML-filer.
 
@@ -46,11 +54,14 @@ app/
   api/preview/route.ts — förhandsgranskning av formulärexporter (inga tic.io-anrop)
   layout.tsx           — global HTML-skal, laddar Poppins-fonten
   login/page.tsx       — inloggningssida
+  granska/, historik/  — granskningskön och historiken (även under /admin)
+  api/historik         — historiken: lista, eller en körning med ?id=
   api/run/route.ts     — tar emot CSV, kör hela flödet per lead, returnerar resultatrader
   api/login, api/logout — sessions-cookie
 lib/
   twinfinder.ts        — all sök-, matchnings- och rankningslogik (se "Flödet" nedan)
   csv.ts               — enkel CSV-parser
+  historik.ts          — sparade körningar (12 mån) och redan föreslagna tvillingar (90 dagar)
   auth.ts              — signerar/verifierar sessions-cookien
 middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 ```

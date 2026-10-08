@@ -15,9 +15,10 @@ import { Forfragan, classifyInquiry, identifyCompany, skalAttHoppaOver, utanPers
 import { ResultRow, processLead } from "./korning";
 import { mottagare, skickaMejl } from "./mail";
 import { GranskaOrsak, GranskaPost, laggIKo } from "./granskning";
+import { markeraOchKomIhag, sparaKorning } from "./historik";
 import type { Klassning } from "./inkorg";
 import { ticKlient } from "./twinfinder";
-import { GRANSKA_ORSAK, forfraganEtikett, likhetText, lokalText, sasongText, urvalText } from "@/app/ui/klartext";
+import { GRANSKA_ORSAK, forfraganEtikett, likhetText, lokalText, sasongText, tidigareText, urvalText } from "@/app/ui/klartext";
 
 // Tak för tic.io-anrop per automatiskt lead (nyckeln har 200/mån).
 const AUTO_MAX_TIC = 4;
@@ -73,7 +74,7 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
           forfragan_namn: f.namn || null,
           forfragan_epost: f.epost || null,
           forfragan_telefon: f.telefon || null,
-          forfragan_text: f.meddelande.replace(/\s+/g, " ").trim(),
+          forfragan_text: f.meddelande.trim(),
         },
       },
       {
@@ -90,19 +91,33 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
       return logg("granskas", `inga_tvillingar: ${r.company.name}: ${rows[0]?.status}`);
     }
 
-    const svar = await skickaMejl({
-      till: mottagare(),
-      amne: `Förslag på tvillingar: ${r.company.name} (${tvillingar.length} bolag)`,
-      html: tvillingMejl(f, etikett, rows),
-      bilagor: [{ filnamn: `tvillingar-${slug(r.company.name)}.csv`, innehall: "\uFEFF" + byggCsv(rows) }],
-    });
-    if (svar.skickat) await cacheSet(bolagNyckel, 1, AUTO_SAMMA_BOLAG_DAGAR);
+    await markeraOchKomIhag(rows);
+    await sparaKorning(rows, "automatik");
+    const svar = await skickaTvillingMejl(rows);
     return logg(svar.skickat ? "skickat" : "fel", svar.fel || `${r.company.name}: ${tvillingar.length} tvillingar`);
   } catch (e: any) {
     // Hellre en post att granska än en förfrågan som försvinner.
     await tillGranskning(f, k, inskickId, "fel", null, null).catch(() => {});
     return logg("fel", String(e?.message || e));
   }
+}
+
+// Mejlet med tvillingarna till säljarna (MAIL_TO). Används av automatiken och
+// när en förfrågan körs från Granska. Samma bolag mejlas sedan inte automatiskt
+// igen på AUTO_SAMMA_BOLAG_DAGAR.
+export async function skickaTvillingMejl(rows: ResultRow[]): Promise<{ skickat: boolean; fel?: string }> {
+  const forsta = rows[0];
+  const tvillingar = rows.filter((x) => x.tvilling_namn);
+  if (!forsta || !tvillingar.length) return { skickat: false, fel: "inga tvillingar" };
+  const namn = forsta.kall_namn || forsta.lead_foretagsnamn;
+  const svar = await skickaMejl({
+    till: mottagare(),
+    amne: `Förslag på tvillingar: ${namn} (${tvillingar.length} bolag)`,
+    html: tvillingMejl(rows),
+    bilagor: [{ filnamn: `tvillingar-${slug(namn)}.csv`, innehall: "\uFEFF" + byggCsv(rows) }],
+  });
+  if (svar.skickat && forsta.kall_org_nr) await cacheSet(`auto:bolag:${forsta.kall_org_nr}`, 1, AUTO_SAMMA_BOLAG_DAGAR);
+  return svar;
 }
 
 async function tillGranskning(
@@ -153,7 +168,8 @@ const RAM = (inne: string) => `<!doctype html><html lang="sv"><body style="margi
 </div></body></html>`;
 
 // Hela förfrågan med avsändarens uppgifter - mejlet går till säljarna själva.
-function citat(f: Forfragan): string {
+type Avsandare = { namn?: string | null; epost?: string | null; telefon?: string | null; meddelande: string };
+function citat(f: Avsandare): string {
   const rader = [
     ["Namn", esc(f.namn)],
     ["E-post", f.epost ? `<a href="mailto:${esc(f.epost)}" style="color:#c9474a">${esc(f.epost)}</a>` : ""],
@@ -162,7 +178,7 @@ function citat(f: Forfragan): string {
     .filter(([, v]) => v)
     .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#74747a">${k}</td><td style="padding:2px 0">${v}</td></tr>`)
     .join("");
-  const text = f.meddelande.trim();
+  const text = (f.meddelande || "").trim();
   return `<div style="border-left:3px solid #eb5f62;background:#fdeced;padding:10px 14px;margin:14px 0;font-size:14px">
 ${rader ? `<table style="border-collapse:collapse;font-size:14px;margin-bottom:${text ? 8 : 0}px">${rader}</table>` : ""}
 ${text ? `<div style="white-space:pre-wrap">${esc(text)}</div>` : ""}
@@ -179,8 +195,17 @@ function kontaktCell(t: ResultRow): string {
   return delar.length ? delar.join("<br>") : "–";
 }
 
-function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string {
+function tvillingMejl(rows: ResultRow[]): string {
   const forsta = rows[0];
+  const avs: Avsandare = {
+    namn: forsta.forfragan_namn,
+    epost: forsta.forfragan_epost,
+    telefon: forsta.forfragan_telefon,
+    meddelande: forsta.forfragan_text || "",
+  };
+  const kalla = [forsta.forfragan_typ, forsta.forfragan_formular && `via ${forsta.forfragan_formular}`, forsta.forfragan_datum]
+    .filter(Boolean)
+    .join(" ");
   const tvillingar = rows.filter((x) => x.tvilling_namn);
   const fakta = [lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan)]
     .filter(Boolean)
@@ -188,7 +213,7 @@ function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string 
   const rader = tvillingar
     .map(
       (t) => `<tr>
-<td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top"><strong>${esc(t.tvilling_namn)}</strong><br><span style="color:#74747a;font-size:12px">${esc(t.tvilling_org_nr)}</span></td>
+<td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top"><strong>${esc(t.tvilling_namn)}</strong><br><span style="color:#74747a;font-size:12px">${esc(t.tvilling_org_nr)}</span>${t.tidigare_datum ? `<br><span style="display:inline-block;margin-top:3px;background:#fff4e0;color:#8a5a00;font-size:11px;padding:1px 6px;border-radius:4px">${esc(tidigareText(t))}</span>` : ""}</td>
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top">${esc(t.tvilling_ort || "–")}<br><span style="color:#74747a;font-size:12px">${esc(t.tvilling_lan || "")}</span></td>
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;text-align:right;white-space:nowrap">${mkr(t.tvilling_oms)}</td>
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;text-align:right">${esc(t.tvilling_anstallda ?? "–")}</td>
@@ -201,14 +226,14 @@ function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string 
   const th = (s: string, hoger = false) =>
     `<th style="text-align:${hoger ? "right" : "left"};padding:8px;border-bottom:2px solid #2b2b2b;font-size:12px">${s}</th>`;
   return RAM(`<h1 style="font-size:20px;margin:0 0 6px">${esc(forsta.kall_namn)} – ${tvillingar.length} liknande bolag</h1>
-<p style="margin:0;color:#4a4a50;font-size:14px">${esc(etikett)} via ${esc(f.formular)} ${esc(f.datum.toLocaleDateString("sv-SE"))}${forsta.kall_lan ? ` · ${esc(forsta.kall_lan)}` : ""}</p>
-${citat(f)}
+${kalla || forsta.kall_lan ? `<p style="margin:0;color:#4a4a50;font-size:14px">${esc(kalla)}${forsta.kall_lan ? ` · ${esc(forsta.kall_lan)}` : ""}</p>` : ""}
+${avs.namn || avs.epost || avs.telefon || avs.meddelande ? citat(avs) : ""}
 ${fakta ? `<p style="font-size:13px;color:#4a4a50;margin:0 0 12px">${esc(fakta)}</p>` : ""}
 <table style="width:100%;border-collapse:collapse;font-size:13px">
 <tr>${th("Bolag")}${th("Ort")}${th("Omsättning", true)}${th("Anställda", true)}${th("Verksamhet")}${th("Likhet")}${th("Kontakt")}</tr>
 ${rader}
 </table>
-<p style="font-size:13px;color:#4a4a50;margin:16px 0 0">Hela listan finns som bilaga (öppnas i Excel).</p>`);
+<p style="font-size:13px;color:#4a4a50;margin:16px 0 0">Hela listan finns som bilaga (öppnas i Excel) och under <a href="${APP_URL}/historik" style="color:#c9474a">Historik</a> i verktyget.</p>`);
 }
 
 function granskaMejl(f: Forfragan, etikett: string, orsak: GranskaOrsak, forslag?: string, bolag?: string): string {
@@ -216,7 +241,7 @@ function granskaMejl(f: Forfragan, etikett: string, orsak: GranskaOrsak, forslag
   return RAM(`<h1 style="font-size:20px;margin:0 0 6px">Ny förfrågan att granska${bolag ? `: ${esc(bolag)}` : ""}</h1>
 <p style="margin:0;color:#4a4a50;font-size:14px">${esc(etikett)} via ${esc(f.formular)} ${esc(f.datum.toLocaleDateString("sv-SE"))}${f.doman ? ` från ${esc(f.doman)}` : ""}</p>
 <p style="font-size:14px;margin:14px 0 0"><strong>Varför granskning:</strong> ${esc(GRANSKA_ORSAK[orsak])}${forslag ? ` Kanske <strong>${esc(forslag)}</strong>?` : ""}</p>
-${citat(f)}
+${citat({ ...f, meddelande: f.meddelande })}
 <p style="font-size:14px;margin:0 0 14px">Förfrågan ligger under <em>Granska</em> i verktyget. Där kan du fylla i eller rätta bolaget och ta fram tvillingarna.</p>
 ${knapp}`);
 }

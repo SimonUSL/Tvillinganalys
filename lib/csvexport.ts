@@ -1,9 +1,10 @@
 // csvexport.ts — tvillingarna som CSV (öppnas i Excel). Används både i
 // webbläsaren (nedladdning) och på servern (bilaga i mejlet).
 import type { ResultRow } from "./korning";
-import { likhetText, statusText } from "@/app/ui/klartext";
+import { likhetText, statusText, tidigareText } from "@/app/ui/klartext";
 
-export const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
+type Kolumn = { key: keyof ResultRow | "kommentar"; label: string; varde?: (r: ResultRow) => unknown };
+export const KOLUMNER: Kolumn[] = [
   { key: "forfragan_datum", label: "Datum" },
   { key: "forfragan_formular", label: "Formulär" },
   { key: "forfragan_doman", label: "Domän" },
@@ -32,6 +33,7 @@ export const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
   { key: "kontakt_namn", label: "Kontakt" },
   { key: "kontakt_mejl", label: "Mejl" },
   { key: "kontakt_telefon", label: "Telefon" },
+  { key: "tidigare_datum", label: "Föreslogs tidigare", varde: (r) => tidigareText(r) },
   { key: "geografi_relevant", label: "Geografi" },
   { key: "sasongseffekt", label: "Säsong" },
   { key: "tvilling_verksamhet", label: "Verksamhet" },
@@ -39,7 +41,6 @@ export const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
 ];
 
 // Kundens export: bara det som behövs för att arbeta med tvillingarna, i klartext.
-type Kolumn = { key: keyof ResultRow | "kommentar"; label: string; varde?: (r: ResultRow) => unknown };
 const KUND_KOLUMNER: Kolumn[] = [
   { key: "forfragan_datum", label: "Datum" },
   { key: "forfragan_formular", label: "Formulär" },
@@ -65,6 +66,7 @@ const KUND_KOLUMNER: Kolumn[] = [
   { key: "kontakt_namn", label: "Kontakt" },
   { key: "kontakt_mejl", label: "Mejl" },
   { key: "kontakt_telefon", label: "Telefon" },
+  { key: "tidigare_datum", label: "Föreslogs tidigare", varde: (r) => tidigareText(r) },
   { key: "kommentar", label: "Kommentar", varde: (r) => (r.tvilling_namn ? "" : statusText(r.status_kod)) },
 ];
 

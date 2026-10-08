@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { ResultRow } from "../api/run/route";
 import { laddaNerCsv, type Korning, type Rad } from "./typer";
-import { likhetText, lokalText, sasongText, statusText, urvalText } from "./klartext";
+import { likhetText, lokalText, sasongText, statusText, tidigareText, urvalText } from "./klartext";
 
 interface Props {
   admin: boolean;
@@ -42,7 +42,7 @@ function forklaring(status: string, urval?: string | null): string {
   return status;
 }
 
-function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: ResultRow[]; vantar: boolean; aktiv: boolean; admin: boolean }) {
+export function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: ResultRow[]; vantar: boolean; aktiv: boolean; admin: boolean }) {
   const forsta = rows[0];
   const tvillingar = rows.filter((r) => r.tvilling_namn);
   const namn = forsta?.kall_namn || lead.namn || lead.org || lead.doman || "Okänt bolag";
@@ -129,6 +129,11 @@ function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: Resul
                     <td>
                       <div className="name">{t.tvilling_namn}</div>
                       <div className="hint">{t.tvilling_org_nr}</div>
+                      {t.tidigare_datum && (
+                        <span className="badge badge-warn" title="Det här bolaget har redan föreslagits som tvilling till ett annat bolag de senaste 90 dagarna.">
+                          {tidigareText(t)}
+                        </span>
+                      )}
                     </td>
                     <td>{likhetBadge(t.tvilling_likhet, admin)}</td>
                     <td>

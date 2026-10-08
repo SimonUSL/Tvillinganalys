@@ -26,6 +26,7 @@ export interface Rad {
   koId?: string; // post i granskningskön (/granska)
   orsak?: string; // varför posten ligger i granskningskön (klartext)
   avsandare?: string; // namn · e-post · telefon ur formuläret
+  avsandare_falt?: { namn?: string | null; epost?: string | null; telefon?: string | null };
   // CSV
   geo?: string;
   sasong?: string;
