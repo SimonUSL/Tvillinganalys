@@ -21,6 +21,11 @@ export function cacheNyckel(prefix: string, data: unknown): string {
   return `${prefix}:${createHash("sha256").update(JSON.stringify(data)).digest("hex").slice(0, 32)}`;
 }
 
+// Ett råkommando mot Redis (används av granskningskön).
+export async function redis(args: (string | number)[]): Promise<any> {
+  return kommando(args);
+}
+
 async function kommando(args: (string | number)[]): Promise<any> {
   const resp = await fetch(URL!, {
     method: "POST",

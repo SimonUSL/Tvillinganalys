@@ -14,6 +14,7 @@ interface Props {
   standardTak: number;
   onTillbaka: () => void;
   onKor: () => void;
+  onTaBort?: (r: Rad) => void; // granskningskön: ta bort posten
 }
 
 const GRUPPER: { grupp: Grupp; rubrik: string; hjalp: string }[] = [
@@ -42,11 +43,13 @@ function kommentarText(k: string): string {
   return m ? `Jev är ${m[1]} säker på att det är rätt bolag.` : k;
 }
 
-function Rad({ r, andra, kalla, admin }: { r: Rad; andra: Props["andra"]; kalla: Kalla; admin: boolean }) {
+function Rad({ r, andra, kalla, admin, onTaBort }: { r: Rad; andra: Props["andra"]; kalla: Kalla; admin: boolean; onTaBort?: Props["onTaBort"] }) {
   const [oppen, setOppen] = useState(false);
   const saknarBolag = r.vald && !harBolag(r);
   // Kunden ser klartext, adminvyn den tekniska kommentaren (Jevs säkerhet m.m.).
-  const kommentar = admin
+  const kommentar = r.orsak
+    ? r.orsak
+    : admin
     ? r.kommentar && kommentarText(r.kommentar)
     : r.grupp === "hoppas"
       ? hoppaText(r.hoppa_kod)
@@ -69,6 +72,7 @@ function Rad({ r, andra, kalla, admin }: { r: Rad; andra: Props["andra"]; kalla:
               {r.doman && <span>· {r.doman}</span>}
               {(r.typ || r.typ_kod) && <span className="badge">{admin ? r.typ : forfraganEtikett(r.typ_kod, r.avsandare_kod)}</span>}
             </div>
+            {r.avsandare && <p className="msg" style={{ fontWeight: 600 }}>{r.avsandare}</p>}
             {r.text && (
               <>
                 <p className={`msg${oppen ? " open" : ""}`}>{r.text}</p>
@@ -133,6 +137,13 @@ function Rad({ r, andra, kalla, admin }: { r: Rad; andra: Props["andra"]; kalla:
           </button>
         </p>
       )}
+      {onTaBort && r.koId && (
+        <p className="note">
+          <button type="button" className="btn-link" onClick={() => onTaBort(r)}>
+            Ta bort ur granskningen
+          </button>
+        </p>
+      )}
     </li>
   );
 }
@@ -159,10 +170,12 @@ export default function Granska(p: Props) {
                 <dt>Behöver bolag</dt>
                 <dd>{antal("behover")}</dd>
               </div>
-              <div>
-                <dt>Hoppas över</dt>
-                <dd>{antal("hoppas")}</dd>
-              </div>
+              {antal("hoppas") > 0 && (
+                <div>
+                  <dt>Hoppas över</dt>
+                  <dd>{antal("hoppas")}</dd>
+                </div>
+              )}
             </>
           )}
         </dl>
@@ -179,7 +192,7 @@ export default function Granska(p: Props) {
             </p>
             <ul className="review-list">
               {rader.map((r) => (
-                <Rad key={r.id} r={r} andra={p.andra} kalla={p.kalla} admin={p.admin} />
+                <Rad key={r.id} r={r} andra={p.andra} kalla={p.kalla} admin={p.admin} onTaBort={p.onTaBort} />
               ))}
             </ul>
           </>

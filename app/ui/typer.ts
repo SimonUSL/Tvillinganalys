@@ -23,6 +23,9 @@ export interface Rad {
   text?: string;
   kommentar?: string; // Jevs matchning eller orsaken till att den hoppas över
   forslag?: { namn: string; org_nr: string }; // osäkert förslag som kan godtas med ett klick
+  koId?: string; // post i granskningskön (/granska)
+  orsak?: string; // varför posten ligger i granskningskön (klartext)
+  avsandare?: string; // namn · e-post · telefon ur formuläret
   // CSV
   geo?: string;
   sasong?: string;

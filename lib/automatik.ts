@@ -3,8 +3,8 @@
 //
 // - Inte värd att söka på (befintlig kund, mäklare, spam, privatperson ...):
 //   inget mejl, bara en loggrad.
-// - Osäkert vilket bolag det är: kort mejl med förfrågan och en uppmaning att
-//   lägga in bolaget i verktyget.
+// - Osäkert bolag, inga tvillingar eller fel: förfrågan läggs i granskningskön
+//   (/granska i verktyget) och mejlet säger varför, med en knapp dit.
 // - Bolaget hittat: tvillingsökning och mejl med listan + Excel-bilaga.
 // Samma inskick hanteras bara en gång, och samma bolag får tvillingar högst
 // en gång per AUTO_SAMMA_BOLAG_DAGAR.
@@ -14,15 +14,18 @@ import { byggCsv } from "./csvexport";
 import { Forfragan, classifyInquiry, identifyCompany, skalAttHoppaOver, utanPersonuppgifter } from "./inkorg";
 import { ResultRow, processLead } from "./korning";
 import { mottagare, skickaMejl } from "./mail";
+import { GranskaOrsak, GranskaPost, laggIKo } from "./granskning";
+import type { Klassning } from "./inkorg";
 import { ticKlient } from "./twinfinder";
-import { forfraganEtikett, likhetText, lokalText, sasongText, urvalText } from "@/app/ui/klartext";
+import { GRANSKA_ORSAK, forfraganEtikett, likhetText, lokalText, sasongText, urvalText } from "@/app/ui/klartext";
 
 // Tak för tic.io-anrop per automatiskt lead (nyckeln har 200/mån).
 const AUTO_MAX_TIC = 4;
 const AUTO_SAMMA_BOLAG_DAGAR = 30;
 const APP_URL = process.env.APP_URL || "https://tvillinganalys.vercel.app";
 
-export type Utfall = "dublett" | "hoppas_over" | "osaker_bolag" | "redan_skickat" | "inga_tvillingar" | "skickat" | "fel";
+export type Utfall = "dublett" | "hoppas_over" | "granskas" | "redan_skickat" | "skickat" | "fel";
+
 
 export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ utfall: Utfall; detalj?: string }> {
   const logg = (utfall: Utfall, detalj?: string) => {
@@ -39,56 +42,100 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
   if (await cacheGet(inskickNyckel)) return logg("dublett", inskickId);
   await cacheSet(inskickNyckel, 1, 7);
 
-  const k = await classifyInquiry(f, typesafeKey);
-  const hoppa = skalAttHoppaOver(f, k);
-  if (hoppa) return logg("hoppas_over", hoppa.text);
+  let k: Klassning | null = null;
+  try {
+    k = await classifyInquiry(f, typesafeKey);
+    const hoppa = skalAttHoppaOver(f, k);
+    if (hoppa) return logg("hoppas_over", hoppa.text);
 
-  const r = await identifyCompany(f, k, bolagsdataKey, typesafeKey);
-  const etikett = forfraganEtikett(k.typ, k.avsandare);
-  if (!r.company) {
-    await skickaMejl({ till: mottagare(), amne: `Ny förfrågan – vilket bolag? (${f.doman || f.epost || "okänd avsändare"})`, html: osakertMejl(f, etikett, r.forslag?.namn) });
-    return logg("osaker_bolag", r.matchning);
-  }
-
-  const bolagNyckel = `auto:bolag:${r.company.org_nr}`;
-  if (await cacheGet(bolagNyckel)) return logg("redan_skickat", r.company.name);
-
-  const rows = await processLead(
-    {
-      namn: r.company.name,
-      orgNr: r.company.org_nr,
-      resolved: r,
-      extra: {
-        forfragan_datum: f.datum.toISOString().slice(0, 10),
-        forfragan_formular: f.formular,
-        forfragan_doman: f.doman,
-        forfragan_typ: etikett,
-        // Säljarnas eget mejl: hela förfrågan med avsändarens uppgifter (inte maskad).
-        forfragan_namn: f.namn || null,
-        forfragan_epost: f.epost || null,
-        forfragan_telefon: f.telefon || null,
-        forfragan_text: f.meddelande.replace(/\s+/g, " ").trim(),
-      },
-    },
-    {
-      tic: ticKlient(ticKey, AUTO_MAX_TIC),
-      bolagsdataKey,
-      typesafeKey,
-      foretagskontaktKey: process.env.FORETAGSKONTAKT_API_KEY,
-      knownCustomerOrgNrs: new Set(),
+    const r = await identifyCompany(f, k, bolagsdataKey, typesafeKey);
+    const etikett = forfraganEtikett(k.typ, k.avsandare);
+    if (!r.company) {
+      const orsak: GranskaOrsak = r.forslag ? "osaker" : r.sokterm ? "ingen" : "inget_namn";
+      await tillGranskning(f, k, inskickId, orsak, r.forslag ?? null, null);
+      return logg("granskas", `${orsak}: ${r.matchning}`);
     }
-  );
-  const tvillingar = rows.filter((x) => x.tvilling_namn);
-  if (!tvillingar.length) return logg("inga_tvillingar", `${r.company.name}: ${rows[0]?.status}`);
 
-  const svar = await skickaMejl({
+    const bolagNyckel = `auto:bolag:${r.company.org_nr}`;
+    if (await cacheGet(bolagNyckel)) return logg("redan_skickat", r.company.name);
+
+    const rows = await processLead(
+      {
+        namn: r.company.name,
+        orgNr: r.company.org_nr,
+        resolved: r,
+        extra: {
+          forfragan_datum: f.datum.toISOString().slice(0, 10),
+          forfragan_formular: f.formular,
+          forfragan_doman: f.doman,
+          forfragan_typ: etikett,
+          // Säljarnas eget mejl: hela förfrågan med avsändarens uppgifter (inte maskad).
+          forfragan_namn: f.namn || null,
+          forfragan_epost: f.epost || null,
+          forfragan_telefon: f.telefon || null,
+          forfragan_text: f.meddelande.replace(/\s+/g, " ").trim(),
+        },
+      },
+      {
+        tic: ticKlient(ticKey, AUTO_MAX_TIC),
+        bolagsdataKey,
+        typesafeKey,
+        foretagskontaktKey: process.env.FORETAGSKONTAKT_API_KEY,
+        knownCustomerOrgNrs: new Set(),
+      }
+    );
+    const tvillingar = rows.filter((x) => x.tvilling_namn);
+    if (!tvillingar.length) {
+      await tillGranskning(f, k, inskickId, "inga_tvillingar", null, { namn: r.company.name, org_nr: r.company.org_nr });
+      return logg("granskas", `inga_tvillingar: ${r.company.name}: ${rows[0]?.status}`);
+    }
+
+    const svar = await skickaMejl({
+      till: mottagare(),
+      amne: `Förslag på tvillingar: ${r.company.name} (${tvillingar.length} bolag)`,
+      html: tvillingMejl(f, etikett, rows),
+      bilagor: [{ filnamn: `tvillingar-${slug(r.company.name)}.csv`, innehall: "\uFEFF" + byggCsv(rows) }],
+    });
+    if (svar.skickat) await cacheSet(bolagNyckel, 1, AUTO_SAMMA_BOLAG_DAGAR);
+    return logg(svar.skickat ? "skickat" : "fel", svar.fel || `${r.company.name}: ${tvillingar.length} tvillingar`);
+  } catch (e: any) {
+    // Hellre en post att granska än en förfrågan som försvinner.
+    await tillGranskning(f, k, inskickId, "fel", null, null).catch(() => {});
+    return logg("fel", String(e?.message || e));
+  }
+}
+
+async function tillGranskning(
+  f: Forfragan,
+  k: Klassning | null,
+  inskickId: string,
+  orsak: GranskaOrsak,
+  forslag: GranskaPost["forslag"],
+  bolag: GranskaPost["bolag"]
+): Promise<void> {
+  const post: GranskaPost = {
+    id: inskickId,
+    skapad: new Date().toISOString(),
+    datum: f.datum.toISOString(),
+    formular: f.formular,
+    doman: f.doman,
+    namn: f.namn,
+    epost: f.epost,
+    telefon: f.telefon,
+    text: f.meddelande,
+    typ_kod: k?.typ || "ny_forfragan",
+    avsandare_kod: k?.avsandare || "oklart",
+    orsak_kod: orsak,
+    forslag,
+    bolag,
+  };
+  await laggIKo(post);
+  const vem = bolag?.namn || f.namn || f.doman || f.epost || "okänd avsändare";
+  await skickaMejl({
     till: mottagare(),
-    amne: `Förslag på tvillingar: ${r.company.name} (${tvillingar.length} bolag)`,
-    html: tvillingMejl(f, etikett, rows),
-    bilagor: [{ filnamn: `tvillingar-${slug(r.company.name)}.csv`, innehall: "﻿" + byggCsv(rows) }],
+    amne: `Att granska: ny förfrågan från ${vem}`,
+    html: granskaMejl(f, k ? forfraganEtikett(k.typ, k.avsandare) : "Ny förfrågan", orsak, forslag?.namn, bolag?.namn),
   });
-  if (svar.skickat) await cacheSet(bolagNyckel, 1, AUTO_SAMMA_BOLAG_DAGAR);
-  return logg(svar.skickat ? "skickat" : "fel", svar.fel || `${r.company.name}: ${tvillingar.length} tvillingar`);
 }
 
 // --- Mejlen (enkel HTML med inbäddade stilar, fungerar i Outlook/Gmail) ----
@@ -164,10 +211,12 @@ ${rader}
 <p style="font-size:13px;color:#4a4a50;margin:16px 0 0">Hela listan finns som bilaga (öppnas i Excel).</p>`);
 }
 
-function osakertMejl(f: Forfragan, etikett: string, forslag?: string): string {
-  return RAM(`<h1 style="font-size:20px;margin:0 0 6px">Ny förfrågan – vilket bolag?</h1>
-<p style="margin:0;color:#4a4a50;font-size:14px">${esc(etikett)} via ${esc(f.formular)} ${esc(f.datum.toLocaleDateString("sv-SE"))} från ${esc(f.doman || "okänd avsändare")}</p>
+function granskaMejl(f: Forfragan, etikett: string, orsak: GranskaOrsak, forslag?: string, bolag?: string): string {
+  const knapp = `<a href="${APP_URL}/granska" style="display:inline-block;background:#eb5f62;color:#ffffff;text-decoration:none;font-weight:bold;padding:12px 20px;border-radius:8px;font-size:14px">Granska i Tvillinganalys</a>`;
+  return RAM(`<h1 style="font-size:20px;margin:0 0 6px">Ny förfrågan att granska${bolag ? `: ${esc(bolag)}` : ""}</h1>
+<p style="margin:0;color:#4a4a50;font-size:14px">${esc(etikett)} via ${esc(f.formular)} ${esc(f.datum.toLocaleDateString("sv-SE"))}${f.doman ? ` från ${esc(f.doman)}` : ""}</p>
+<p style="font-size:14px;margin:14px 0 0"><strong>Varför granskning:</strong> ${esc(GRANSKA_ORSAK[orsak])}${forslag ? ` Kanske <strong>${esc(forslag)}</strong>?` : ""}</p>
 ${citat(f)}
-<p style="font-size:14px;margin:0 0 8px">Vi kunde inte säkert avgöra vilket bolag som skickat förfrågan${forslag ? ` (kanske <strong>${esc(forslag)}</strong>?)` : ""}, så inga tvillingar har tagits fram.</p>
-<p style="font-size:14px;margin:0">Lägg in bolaget i verktyget under <em>Egen lista med bolag</em> så tas tvillingarna fram: <a href="${APP_URL}" style="color:#c9474a">${esc(APP_URL)}</a></p>`);
+<p style="font-size:14px;margin:0 0 14px">Förfrågan ligger under <em>Granska</em> i verktyget. Där kan du fylla i eller rätta bolaget och ta fram tvillingarna.</p>
+${knapp}`);
 }

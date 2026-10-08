@@ -90,6 +90,15 @@ export function statusText(kod?: string | null): string {
   }
 }
 
+// Varför en automatisk förfrågan hamnat i granskningskön.
+export const GRANSKA_ORSAK: Record<string, string> = {
+  osaker: "Vi är osäkra på vilket bolag som skickade förfrågan.",
+  ingen: "Vi hittade inget bolag i registret som matchar avsändaren.",
+  inget_namn: "Förfrågan innehåller inget bolagsnamn och skickades från en privat e-postadress.",
+  inga_tvillingar: "Vi hittade inga tillräckligt lika bolag.",
+  fel: "Något gick fel när förfrågan behandlades.",
+};
+
 // "direkt konkurrent (2.9/3)" -> "Direkt konkurrent"
 export function likhetText(t?: string | null): string {
   if (!t) return "";
