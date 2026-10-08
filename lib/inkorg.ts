@@ -171,12 +171,16 @@ const AVSANDARE_TEXT: Record<string, string> = {
 
 // Över denna sannolikhet räknas avsändaren som mäklare (utesluts tills vidare).
 const MIN_MAKLARE = 0.5;
+// Över denna sannolikhet räknas avsändaren som utländsk (finns inte i svenska
+// registret). Högt satt: hellre en post i Granska än att missa ett svenskt bolag.
+const MIN_UTLANDSK = 0.8;
 
 export interface Klassning {
   typ: string;
   typ_p: number;
   avsandare: string;
   maklare: number;
+  utlandsk: number;
   namnfras: string | null;
   beskrivning: string; // t.ex. "ny förfrågan · företag (Jev 100 %)"
 }
@@ -207,6 +211,11 @@ export async function classifyInquiry(f: Forfragan, typesafeKey: string): Promis
     maklare: {
       type: "noul",
       instructions: "Is the sender of `inquiry` a real-estate agency or real-estate agent (fastighetsmäklare)?",
+    },
+    utlandsk: {
+      type: "noul",
+      instructions:
+        "Is the sender of `inquiry` a company or organisation based outside Sweden, with no Swedish company of its own? Use what the message says about where the sender is based and `inquiry.email_domain`. A message written in English, or a .com domain, does not by itself mean the sender is foreign; a Swedish company or a Swedish subsidiary of a foreign group counts as Swedish (answer no).",
     },
   };
   if (Object.keys(kandidater).length) {
@@ -245,6 +254,7 @@ export async function classifyInquiry(f: Forfragan, typesafeKey: string): Promis
     typ_p,
     avsandare,
     maklare: a.maklare.noul,
+    utlandsk: a.utlandsk?.noul ?? 0,
     namnfras: namnVal && namnVal !== "inget" ? kandidater[namnVal] : null,
     beskrivning: `${TYP_TEXT[typ] ?? typ} · ${AVSANDARE_TEXT[avsandare] ?? avsandare} (Jev ${procent(typ_p)})`,
   };
@@ -263,6 +273,7 @@ export function skalAttHoppaOver(f: Forfragan, k: Klassning): HoppaOver | null {
   if (k.maklare >= MIN_MAKLARE) return { kod: "maklare", text: `mäklare, utesluts tills vidare (Jev ${procent(k.maklare)})` };
   const tld = f.doman?.split(".").pop() || "";
   if (UTLANDSKA_TLD.has(tld)) return { kod: "utlandsk", text: `utländsk domän (.${tld}), finns inte i svenska registret` };
+  if (k.utlandsk >= MIN_UTLANDSK) return { kod: "utlandsk", text: `utländskt bolag, finns inte i svenska registret (Jev ${procent(k.utlandsk)})` };
   return null;
 }
 
