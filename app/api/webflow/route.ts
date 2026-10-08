@@ -68,6 +68,8 @@ export async function POST(req: NextRequest) {
       steg: "webflow",
       status: "mottagen",
       via: signaturFel ? "url-nyckel" : "signatur",
+      // Var funktionen faktiskt körs - tic.io tar bara emot anrop från Norden/Tyskland.
+      korregion: process.env.VERCEL_REGION ?? null,
       formular: f.formular,
       doman: f.doman,
       falt: Object.keys(data),
