@@ -23,6 +23,7 @@ export function isoDag(d: Date): string {
 const dagarSedan = (n: number) => isoDag(new Date(Date.now() - n * 24 * 3600 * 1000));
 
 interface Props {
+  admin: boolean;
   kalla: Kalla;
   setKalla: (k: Kalla) => void;
   filer: { name: string; text: string }[];
@@ -74,7 +75,7 @@ export default function Underlag(p: Props) {
               onChange={() => p.setKalla("export")}
             />
             <strong>Förfrågningar från webbplatsen</strong>
-            <span>Ladda upp formulärexporterna. Jev sorterar ut vilka som är värda att tvillingsöka.</span>
+            <span>Ladda upp formulärexporterna. Vi sorterar ut förfrågningarna som är värda att söka på.</span>
           </label>
           <label className="choice">
             <input type="radio" name="kalla" value="csv" checked={p.kalla === "csv"} onChange={() => p.setKalla("csv")} />
@@ -174,18 +175,20 @@ export default function Underlag(p: Props) {
           <p className="hint" id="csv-hjalp">
             Bara <code>foretagsnamn</code> krävs. Valfritt: <code>org_nr</code> (pekar ut bolaget exakt),{" "}
             <code>geografi_relevant</code>, <code>sasongseffekt</code> och <code>storlek_strikt</code> (ja/nej). Tomma
-            geografi- och säsongsceller gissar Jev utifrån bolagets verksamhet.
+            fält fylls i automatiskt utifrån bolagets verksamhet.
           </p>
           <textarea id="csv" rows={9} aria-describedby="csv-hjalp" value={p.csv} onChange={(e) => p.setCsv(e.target.value)} />
         </div>
       )}
 
       <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <p className="hint">Nästa steg använder inga tic.io-anrop — du granskar listan innan något söks.</p>
+        <p className="hint">
+          {p.admin ? "Nästa steg använder inga tic.io-anrop — du granskar listan innan något söks." : "Du granskar listan innan något söks."}
+        </p>
         <button type="submit" className="btn btn-primary" aria-disabled={!kanFortsatta || p.laddar}>
           {p.laddar ? (
             <>
-              <span className="spinner" aria-hidden="true" /> Jev läser förfrågningarna…
+              <span className="spinner" aria-hidden="true" /> Läser förfrågningarna…
             </>
           ) : p.kalla === "export" ? (
             "Förhandsgranska förfrågningar →"

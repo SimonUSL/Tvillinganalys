@@ -11,12 +11,17 @@ export interface Forhandsrad {
   datum: string;
   formular: string;
   doman: string | null;
-  typ: string;
+  typ: string; // teknisk beskrivning (adminvyn)
+  typ_kod: string | null; // ny_forfragan | befintlig_kund | ...
+  avsandare_kod: string | null; // foretag | forening | offentlig | privatperson | oklart
   text: string;
-  hoppa: string | null; // orsak att inte tvillingsöka, null = föreslås för sökning
+  hoppa: string | null; // orsak att inte tvillingsöka (teknisk text), null = föreslås för sökning
+  hoppa_kod: string | null;
   bolag_namn: string | null;
   bolag_org_nr: string | null;
-  matchning: string;
+  matchning: string; // teknisk text (adminvyn)
+  matchning_kod: "saker" | "osaker" | "ingen" | "inget_namn" | "fel" | null;
+  sakerhet: number | null;
   forslag?: { namn: string; org_nr: string } | null; // osäkert förslag, godtas med ett klick
 }
 
@@ -42,35 +47,46 @@ export async function POST(req: NextRequest) {
 
   const rader: Forhandsrad[] = await Promise.all(
     forfragningar.map(async (f, id): Promise<Forhandsrad> => {
-      const bas = {
+      const bas: Forhandsrad = {
         id,
         datum: datumText(f.datum),
         formular: f.formular,
         doman: f.doman,
         // E-post och telefonnummer maskas även i gränssnittet - granskningen behöver dem inte.
         text: utanPersonuppgifter(f.meddelande).replace(/\s+/g, " ").slice(0, 300),
+        typ: "",
+        typ_kod: null,
+        avsandare_kod: null,
+        hoppa: null,
+        hoppa_kod: null,
+        bolag_namn: null,
+        bolag_org_nr: null,
+        matchning: "",
+        matchning_kod: null,
+        sakerhet: null,
       };
       let k;
       try {
         k = await classifyInquiry(f, typesafeKey);
       } catch (e: any) {
-        return { ...bas, typ: "", hoppa: `fel vid klassning: ${e.message || e}`, bolag_namn: null, bolag_org_nr: null, matchning: "" };
+        return { ...bas, hoppa: `fel vid klassning: ${e.message || e}`, hoppa_kod: "fel" };
       }
+      const klass = { ...bas, typ: k.beskrivning, typ_kod: k.typ, avsandare_kod: k.avsandare };
       const hoppa = skalAttHoppaOver(f, k);
-      if (hoppa) return { ...bas, typ: k.beskrivning, hoppa, bolag_namn: null, bolag_org_nr: null, matchning: "" };
+      if (hoppa) return { ...klass, hoppa: hoppa.text, hoppa_kod: hoppa.kod };
       try {
         const r = await identifyCompany(f, k, bolagsdataKey, typesafeKey);
         return {
-          ...bas,
-          typ: k.beskrivning,
-          hoppa: null,
+          ...klass,
           bolag_namn: r.company?.name ?? null,
           bolag_org_nr: r.company?.org_nr ?? null,
           matchning: r.matchning,
+          matchning_kod: r.company ? "saker" : r.forslag ? "osaker" : r.sokterm ? "ingen" : "inget_namn",
+          sakerhet: r.sakerhet ?? null,
           forslag: r.forslag ?? null,
         };
       } catch (e: any) {
-        return { ...bas, typ: k.beskrivning, hoppa: null, bolag_namn: null, bolag_org_nr: null, matchning: `fel vid bolagssökning: ${e.message || e}` };
+        return { ...klass, matchning: `fel vid bolagssökning: ${e.message || e}`, matchning_kod: "fel" };
       }
     })
   );

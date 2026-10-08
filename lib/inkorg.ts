@@ -238,14 +238,19 @@ export async function classifyInquiry(f: Forfragan, typesafeKey: string): Promis
   };
 }
 
-// null = gå vidare till tvillingsökning, annars orsaken till att hoppa över.
-export function skalAttHoppaOver(f: Forfragan, k: Klassning): string | null {
-  if (k.typ === "befintlig_kund") return "befintlig kund (tvillingar från kunder är ett eget projekt)";
-  if (k.typ !== "ny_forfragan") return `inte en ny förfrågan: ${TYP_TEXT[k.typ] ?? k.typ}`;
-  if (k.avsandare === "privatperson") return "privatperson";
-  if (k.maklare >= MIN_MAKLARE) return `mäklare, utesluts tills vidare (Jev ${procent(k.maklare)})`;
+// null = gå vidare till tvillingsökning, annars orsaken (kod för gränssnittet
+// + teknisk text för adminvyn) till att hoppa över.
+export interface HoppaOver {
+  kod: string; // befintlig_kund | maklare | privatperson | utlandsk | <typ> (t.ex. oklart)
+  text: string;
+}
+export function skalAttHoppaOver(f: Forfragan, k: Klassning): HoppaOver | null {
+  if (k.typ === "befintlig_kund") return { kod: "befintlig_kund", text: "befintlig kund (tvillingar från kunder är ett eget projekt)" };
+  if (k.typ !== "ny_forfragan") return { kod: k.typ, text: `inte en ny förfrågan: ${TYP_TEXT[k.typ] ?? k.typ}` };
+  if (k.avsandare === "privatperson") return { kod: "privatperson", text: "privatperson" };
+  if (k.maklare >= MIN_MAKLARE) return { kod: "maklare", text: `mäklare, utesluts tills vidare (Jev ${procent(k.maklare)})` };
   const tld = f.doman?.split(".").pop() || "";
-  if (UTLANDSKA_TLD.has(tld)) return `utländsk domän (.${tld}), finns inte i svenska registret`;
+  if (UTLANDSKA_TLD.has(tld)) return { kod: "utlandsk", text: `utländsk domän (.${tld}), finns inte i svenska registret` };
   return null;
 }
 

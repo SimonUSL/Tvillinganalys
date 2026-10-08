@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import type { ResultRow } from "../api/run/route";
 import { laddaNerCsv, type Korning, type Rad } from "./typer";
+import { likhetText, lokalText, sasongText, statusText, urvalText } from "./klartext";
 
 interface Props {
+  admin: boolean;
   korning: Korning;
   leads: Rad[]; // i den ordning de körs
   onTillbaka: () => void;
@@ -14,7 +16,7 @@ interface Props {
 const mkr = (kr: number | null | undefined) =>
   kr === null || kr === undefined ? "–" : `${(kr / 1e6).toLocaleString("sv-SE", { maximumFractionDigits: kr < 1e7 ? 1 : 0 })} Mkr`;
 
-function likhetBadge(text: string | null | undefined) {
+function likhetBadge(text: string | null | undefined, admin: boolean) {
   if (!text) return null;
   const klass = text.startsWith("direkt")
     ? "badge-ok"
@@ -23,7 +25,7 @@ function likhetBadge(text: string | null | undefined) {
       : text.startsWith("ej bedömd")
         ? ""
         : "badge-warn";
-  return <span className={`badge ${klass}`}>{text.replace(/\s*\(.*\)$/, "")}</span>;
+  return <span className={`badge ${klass}`}>{admin ? text.replace(/\s*\(.*\)$/, "") : likhetText(text)}</span>;
 }
 
 // Statusen förklarad i klartext för leads utan tvillingar.
@@ -37,7 +39,7 @@ function forklaring(status: string, urval?: string | null): string {
   return status;
 }
 
-function LeadKort({ lead, rows, vantar, aktiv }: { lead: Rad; rows: ResultRow[]; vantar: boolean; aktiv: boolean }) {
+function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: ResultRow[]; vantar: boolean; aktiv: boolean; admin: boolean }) {
   const forsta = rows[0];
   const tvillingar = rows.filter((r) => r.tvilling_namn);
   const namn = forsta?.kall_namn || lead.namn || lead.org || lead.doman || "Okänt bolag";
@@ -78,14 +80,25 @@ function LeadKort({ lead, rows, vantar, aktiv }: { lead: Rad; rows: ResultRow[];
             <span className="badge badge-warn">inga tvillingar</span>
           )}
         </h3>
-        {forsta && (
-          <div className="chips">
-            {matchning && <span className="badge">bolag: {matchning}</span>}
-            {forsta.geografi_relevant && <span className="badge">lokal: {forsta.geografi_relevant}</span>}
-            {forsta.sasongseffekt && <span className="badge">säsong: {forsta.sasongseffekt}</span>}
-            {forsta.urval && <span className="badge badge-info">{forsta.urval}</span>}
-          </div>
-        )}
+        {forsta &&
+          (admin ? (
+            <div className="chips">
+              {matchning && <span className="badge">bolag: {matchning}</span>}
+              {forsta.geografi_relevant && <span className="badge">lokal: {forsta.geografi_relevant}</span>}
+              {forsta.sasongseffekt && <span className="badge">säsong: {forsta.sasongseffekt}</span>}
+              {forsta.urval && <span className="badge badge-info">{forsta.urval}</span>}
+            </div>
+          ) : (
+            <div className="chips">
+              {[lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan)]
+                .filter(Boolean)
+                .map((t, i) => (
+                  <span key={i} className={`badge${i === 2 ? " badge-info" : ""}`}>
+                    {t}
+                  </span>
+                ))}
+            </div>
+          ))}
         {lead.text && (
           <p className="hint" style={{ margin: 0 }}>
             Förfrågan {lead.datum}: “{lead.text.length > 160 ? `${lead.text.slice(0, 160)}…` : lead.text}”
@@ -114,7 +127,7 @@ function LeadKort({ lead, rows, vantar, aktiv }: { lead: Rad; rows: ResultRow[];
                       <div className="name">{t.tvilling_namn}</div>
                       <div className="hint">{t.tvilling_org_nr}</div>
                     </td>
-                    <td>{likhetBadge(t.tvilling_likhet)}</td>
+                    <td>{likhetBadge(t.tvilling_likhet, admin)}</td>
                     <td>
                       {t.tvilling_ort || "–"}
                       {t.tvilling_lan && <div className="hint">{t.tvilling_lan}</div>}
@@ -140,13 +153,15 @@ function LeadKort({ lead, rows, vantar, aktiv }: { lead: Rad; rows: ResultRow[];
             </table>
           </div>
         ) : (
-          <p className="empty-state">{forsta ? forklaring(forsta.status, forsta.urval) : "Inget resultat."}</p>
+          <p className="empty-state">
+            {!forsta ? "Inget resultat." : admin ? forklaring(forsta.status, forsta.urval) : statusText(forsta.status_kod) || forsta.status}
+          </p>
         ))}
     </details>
   );
 }
 
-export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
+export default function Resultat({ admin, korning, leads, onTillbaka, onNy }: Props) {
   const raderPerLead = new Map<number, ResultRow[]>();
   for (const r of korning.rows) {
     const id = r.lead_id ?? -1;
@@ -174,6 +189,7 @@ export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
                 <dt>Tvillingar totalt</dt>
                 <dd>{antalTvillingar}</dd>
               </div>
+              {admin && (
               <div>
                 <dt>tic.io-anrop</dt>
                 <dd>
@@ -186,6 +202,7 @@ export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
                   )}
                 </dd>
               </div>
+              )}
             </dl>
             {korning.fel && (
               <p className="alert" role="alert">
@@ -205,7 +222,9 @@ export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
                 type="button"
                 className="btn btn-primary"
                 aria-disabled={!korning.rows.length}
-                onClick={() => korning.rows.length && laddaNerCsv(korning.rows, `tvillingar-${new Date().toISOString().slice(0, 10)}.csv`)}
+                onClick={() =>
+                  korning.rows.length && laddaNerCsv(korning.rows, `tvillingar-${new Date().toISOString().slice(0, 10)}.csv`, admin)
+                }
               >
                 Ladda ner resultatet (CSV)
               </button>
@@ -225,7 +244,9 @@ export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
               aria-label="Förlopp för tvillingsökningen"
             />
             <p className="hint">
-              Varje bolag tar några sekunder: bolagsdataapi först, tic.io bara vid behov, och Jev bedömer varje kandidat.
+              {admin
+                ? "Varje bolag tar några sekunder: bolagsdataapi först, tic.io bara vid behov, och Jev bedömer varje kandidat."
+                : "Det tar några sekunder per bolag."}{" "}
               Resultaten dyker upp nedan allteftersom.
             </p>
           </>
@@ -239,6 +260,7 @@ export default function Resultat({ korning, leads, onTillbaka, onNy }: Props) {
           rows={raderPerLead.get(l.id) || []}
           vantar={!raderPerLead.has(l.id) && !klar}
           aktiv={!klar && i === korning.index}
+          admin={admin}
         />
       ))}
     </div>

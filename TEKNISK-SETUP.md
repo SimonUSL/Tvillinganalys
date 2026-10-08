@@ -10,6 +10,12 @@ Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas a
 - Ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
 - Funktionerna körs i Stockholm (`regions: ["arn1"]` i `vercel.json`) — tic.io tar bara emot anrop från SE/NO/DK/FI/DE.
 
+## Kundvy och adminvy
+
+- **`/`** — kundens vy. Klartext utan teknik: inga omnämnanden av Jev, tic.io, bolagsdataapi, procent eller SNI-koder. Kundens CSV-export innehåller bara arbetskolumner (bolag, tvilling, likhet, ort, storlek, verksamhet, kontakt, kommentar).
+- **`/admin`** — teamets vy, samma flöde plus tekniska detaljer: Jevs säkerhet, klassning med sannolikheter, hur urvalet gjordes, taket för tic.io-anrop, antal anrop och den fullständiga tekniska CSV-exporten. Inloggning på `/admin/login` med **`ADMIN_PASSWORD`** (miljövariabel; saknas den är `/admin` stängd). En admininloggning räcker även för kundvyn.
+- Klartexterna för kunden finns i `app/ui/klartext.ts`. Backend skickar koder (`typ_kod`, `hoppa_kod`, `matchning_kod`, `urval_kod`, `status_kod`, `lokal`, `sasong_kod`) som gränssnittet formulerar.
+
 ## Gränssnittet — tre steg
 
 1. **Underlag** (`app/ui/Underlag.tsx`): formulärexporter (dra in filerna, välj period) eller egen CSV-lista.
@@ -45,7 +51,8 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `TYPESAFE_API_KEY` | Jev: väljer rätt bolag, gissar geografi/säsong, bedömer tvillingar. Utan den faller appen tillbaka på enkla regler. |
 | `BOLAGSDATA_API_KEY` | Uppslag av kallbolaget (bolagsdataapi.se). Utan den används tic.io även för det (dyrare för kvoten). |
 | `FORETAGSKONTAKT_API_KEY` | Valfri, obekräftad integration för kontaktpersoner. |
-| `SITE_PASSWORD` / `SITE_USERNAME` | Valfritt inloggningsskydd. |
+| `SITE_PASSWORD` / `SITE_USERNAME` | Valfritt inloggningsskydd för kundvyn. |
+| `ADMIN_PASSWORD` | Lösenord till teamets adminvy (`/admin`). Saknas den är adminvyn stängd. |
 
 Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör appen mot riktiga API:er — **varje körning drar på tic.io-kvoten.**
 

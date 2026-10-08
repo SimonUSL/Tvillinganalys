@@ -132,7 +132,7 @@ async function pickSourceHit(
   candidates: Record<string, any>[],
   typesafeKey: string | undefined,
   kontext?: LeadKontext
-): Promise<{ index: number | null; matchning: string; forslag?: number }> {
+): Promise<{ index: number | null; matchning: string; forslag?: number; sakerhet?: number }> {
   // Med kontext (sökterm gissad ur en förfrågan) kan även en ensam träff vara fel.
   if (candidates.length === 1 && !kontext) return { index: 0, matchning: "enda träffen" };
   if (!typesafeKey) return { index: 0, matchning: "första träffen (TYPESAFE_API_KEY saknas)" };
@@ -218,6 +218,7 @@ async function pickSourceHit(
     return {
       index: best,
       matchning: p >= SAKER_MATCHNING ? `Jev ${procent(p)}` : `osäker (Jev ${procent(p)}) – kontrollera`,
+      sakerhet: p,
     };
   } catch (e: any) {
     return { index: 0, matchning: `första träffen (Jev-fel: ${e.message || e})` };
@@ -232,9 +233,24 @@ export interface SourceResult {
   ticSource?: TicSource;
   // Osäkert förslag som användaren kan godta med ett klick i granskningen.
   forslag?: { namn: string; org_nr: string };
+  sakerhet?: number; // Jevs sannolikhet för det valda bolaget
 }
 
 const TIC_NAME_SEARCH_LIMIT = 10;
+
+// tic.io:s registeredOffices innehåller även tidigare säten, i godtycklig
+// ordning - [0] gav t.ex. "Västra Götalands län" för ett bolag i Uppsala.
+// Använd sätet som matchar den aktuella länskoden, annars det senast sedda.
+function aktuelltSate(doc: any): any | null {
+  const saten: any[] = docGet(doc, "registeredOffices") || [];
+  if (!saten.length) return null;
+  const senast = (a: any, b: any) => (b.firstSeenAt ?? 0) - (a.firstSeenAt ?? 0);
+  const kod = docGet(doc, "registeredOfficeCountyCode");
+  const iLanet = kod === null ? [] : saten.filter((o) => Number(o.countyCode) === Number(kod));
+  return [...(iLanet.length ? iLanet : saten)].sort(senast)[0];
+}
+const ticLan = (doc: any): string | null => aktuelltSate(doc)?.county ?? docGet(doc, "mostRecentRegisteredAddress.county");
+const ticKommun = (doc: any): string | null => aktuelltSate(doc)?.municipality ?? null;
 
 // Exakt antal anställda om det finns, annars mitten av SCB:s storleksklass.
 function ticEmployees(doc: any): { employees: number | null; uppskattat: boolean } {
@@ -261,8 +277,8 @@ function companyFromTicDoc(doc: any, matchning: string): Company {
       .sort((a: any, b: any) => (a.rank ?? 0) - (b.rank ?? 0))
       .map((c: any) => c.sni_2007Code)
       .filter(Boolean),
-    lan: docGet(doc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county"),
-    ort: docGet(doc, "mostRecentRegisteredAddress.city", "registeredOffices[0].municipality"),
+    lan: ticLan(doc),
+    ort: docGet(doc, "mostRecentRegisteredAddress.city") ?? ticKommun(doc),
     matchning,
   };
 }
@@ -402,12 +418,13 @@ export async function resolveViaBolagsdata(
     };
   });
 
-  const { index, matchning, forslag } = await pickSourceHit(companyName, kandidater, typesafeKey, kontext);
+  const { index, matchning, forslag, sakerhet } = await pickSourceHit(companyName, kandidater, typesafeKey, kontext);
   if (index === null) {
     const h = forslag !== undefined ? urval[forslag] : null;
     return { company: null, matchning, ...(h ? { forslag: { namn: h.name, org_nr: normOrgNr(h.org_nr) } } : {}) };
   }
-  return bolagsdataDetails(urval[index].org_nr, bolagsdataKey, urval[index], matchning, detaljer[index] ?? undefined);
+  const res = await bolagsdataDetails(urval[index].org_nr, bolagsdataKey, urval[index], matchning, detaljer[index] ?? undefined);
+  return { ...res, sakerhet };
 }
 
 // Så många namnträffar får verksamhetsbeskrivning när bolaget ska hittas ur en förfrågan.
@@ -532,7 +549,7 @@ function ticProfile(doc: any): TicProfile {
     legal_form: docGet(doc, "legalEntityType"),
     employees: ticEmployees(doc).employees,
     website: docGet(doc, "hyperlinks[0].hyperlink"),
-    municipality: docGet(doc, "registeredOffices[0].municipality", "mostRecentRegisteredAddress.city"),
+    municipality: ticKommun(doc) ?? docGet(doc, "mostRecentRegisteredAddress.city"),
     owned_through: Array.from(new Set(owners.map((o) => o.throughName).filter(Boolean))) as string[],
   };
 }
@@ -769,8 +786,8 @@ function ticSourceFromDoc(sourceDoc: any, source: Company): TicSource {
     if (c.sni_2007Code) sni2007.add(c.sni_2007Code);
     if (c.sni_2025Code) sni2025.add(c.sni_2025Code);
   }
-  const county = sourceDoc ? docGet(sourceDoc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county") : null;
-  const countyCode = sourceDoc ? docGet(sourceDoc, "registeredOfficeCountyCode", "registeredOffices[0].countyCode") : null;
+  const county = sourceDoc ? ticLan(sourceDoc) : null;
+  const countyCode = sourceDoc ? docGet(sourceDoc, "registeredOfficeCountyCode") ?? aktuelltSate(sourceDoc)?.countyCode ?? null : null;
   return { profile, sni2007, sni2025, county, countyCode: countyCode === null ? null : Number(countyCode) };
 }
 
@@ -934,7 +951,12 @@ function sizeSortField(source: Company): string | null {
   return null;
 }
 
+// Hur tvillingarna togs fram, som kod - gränssnittet formulerar texten.
+export type UrvalKod = "namn" | "nisch" | "storlek" | "strikt" | "nyckelord" | "inga";
+
 export interface TwinResult {
+  urval_kod: UrvalKod;
+  tic_tak: boolean; // taket för tic.io-anrop nåddes
   twins: Twin[];
   // Hur kandidaterna valdes, t.ex. "nischbransch (139 bolag med SNI 93111): storlek ignorerad".
   urval: string;
@@ -957,6 +979,8 @@ export async function findTwins(
   const logg: Record<string, any> = { steg: "tvillingsökning", kallbolag: source.name };
   const anropFore = tic.anrop;
   const urvalDelar: string[] = [];
+  let urvalKod: UrvalKod = "inga";
+  let ticTak = false;
 
   // --- Gemensamt: kandidatpool, Jev-bedömning och poäng ---------------------
   const seen = new Set<string>([sourceOrgNr]);
@@ -1024,7 +1048,10 @@ export async function findTwins(
       logg.bolagsdata = fas0.logg;
       for (const { company, profile, koncern } of fas0.pool) koncernInfo.set(company, koncern);
       await judgePool(fas0.pool.map(({ company, profile }) => ({ company, profile })));
-      if (fas0.pool.length) urvalDelar.push(fas0.urval);
+      if (fas0.pool.length) {
+        urvalDelar.push(fas0.urval);
+        urvalKod = "namn";
+      }
     } catch (e: any) {
       logg.bolagsdata_fel = String(e.message || e);
     }
@@ -1038,6 +1065,7 @@ export async function findTwins(
     } catch (e: any) {
       if (!(e instanceof TicBudgetSlut)) throw e;
       logg.tic_budget_slut = true;
+      ticTak = true;
       urvalDelar.push("tic.io-taket nått");
     }
   } else {
@@ -1120,6 +1148,7 @@ export async function findTwins(
       }
     }
 
+    urvalKod = !sniFilter ? "nyckelord" : options.storlek_strikt ? "strikt" : nisch ? "nisch" : "storlek";
     urvalDelar.push(
       (!sniFilter
         ? logg.sni_utan_traffar
@@ -1141,7 +1170,7 @@ export async function findTwins(
         if (!candOrgNr || excludeOrgNrs.has(candOrgNr) || seen.has(candOrgNr)) continue;
         seen.add(candOrgNr);
 
-        const candLan = docGet(doc, "registeredOffices[0].county", "mostRecentRegisteredAddress.county", "lan");
+        const candLan = ticLan(doc) ?? docGet(doc, "lan");
         if (options.geografi_relevant && sourceLan && candLan && normLan(candLan) !== normLan(sourceLan)) continue;
 
         const profile = ticProfile(doc);
@@ -1228,10 +1257,10 @@ export async function findTwins(
   // konkurrenter) - då går den närmast kallbolaget i storlek först.
   const steg = (t: Twin) => Math.round((t.poang ?? 0) * 20);
   twins.sort((a, b) => steg(b) - steg(a) || (narhet.get(b) ?? 0) - (narhet.get(a) ?? 0));
-  if (!typesafeKey) return { urval, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
+  if (!typesafeKey) return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
-  return { urval, twins: kvar.slice(0, MAX_TWINS_PER_LEAD) };
+  return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: kvar.slice(0, MAX_TWINS_PER_LEAD) };
 }
 
 // --- Fas 0: kandidater från bolagsdataapi --------------------------------

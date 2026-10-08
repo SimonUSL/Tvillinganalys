@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 
-const SESSION_COOKIE = "tvillinganalys_session";
-
+// Loggar ut från både kundens app och adminvyn.
 export async function POST() {
   const res = NextResponse.json({ ok: true });
-  res.cookies.set(SESSION_COOKIE, "", { path: "/", maxAge: 0 });
+  res.cookies.set("tvillinganalys_session", "", { path: "/", maxAge: 0 });
+  res.cookies.set("tvillinganalys_admin", "", { path: "/", maxAge: 0 });
   return res;
 }

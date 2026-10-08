@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import type { Grupp, Kalla, Rad } from "./typer";
+import { forfraganEtikett, hoppaText, matchningText } from "./klartext";
 
 interface Props {
+  admin: boolean;
   kalla: Kalla;
   rader: Rad[];
   andra: (id: number, falt: Partial<Rad>) => void;
@@ -18,17 +20,17 @@ const GRUPPER: { grupp: Grupp; rubrik: string; hjalp: string }[] = [
   {
     grupp: "valda",
     rubrik: "Föreslås för tvillingsökning",
-    hjalp: "Jev hittade bolaget. Kontrollera att det stämmer — ändra namnet eller org.nr om fel bolag valts.",
+    hjalp: "Bolaget är identifierat. Kontrollera att det stämmer — ändra namnet eller org.nr om fel bolag valts.",
   },
   {
     grupp: "behover",
     rubrik: "Behöver bolag",
-    hjalp: "Nya förfrågningar där Jev inte är säker på vilket bolag som skickat dem. Fyll i bolagsnamn eller org.nr för att ta med dem.",
+    hjalp: "Nya förfrågningar där vi inte kunde avgöra vilket bolag som skickat dem. Fyll i bolagsnamn eller org.nr för att ta med dem.",
   },
   {
     grupp: "hoppas",
     rubrik: "Hoppas över",
-    hjalp: "Inte nya förfrågningar från organisationer (befintliga kunder, mäklare, privatpersoner, spam m.m.). Bocka i för att ta med ändå.",
+    hjalp: "Befintliga kunder, mäklare, privatpersoner, säljförsök och otydliga förfrågningar. Bocka i för att ta med ändå.",
   },
 ];
 
@@ -40,9 +42,15 @@ function kommentarText(k: string): string {
   return m ? `Jev är ${m[1]} säker på att det är rätt bolag.` : k;
 }
 
-function Rad({ r, andra, kalla }: { r: Rad; andra: Props["andra"]; kalla: Kalla }) {
+function Rad({ r, andra, kalla, admin }: { r: Rad; andra: Props["andra"]; kalla: Kalla; admin: boolean }) {
   const [oppen, setOppen] = useState(false);
   const saknarBolag = r.vald && !harBolag(r);
+  // Kunden ser klartext, adminvyn den tekniska kommentaren (Jevs säkerhet m.m.).
+  const kommentar = admin
+    ? r.kommentar && kommentarText(r.kommentar)
+    : r.grupp === "hoppas"
+      ? hoppaText(r.hoppa_kod)
+      : matchningText(r.matchning_kod);
   return (
     <li className={`review-item${r.vald ? "" : " av"}`}>
       <input
@@ -59,7 +67,7 @@ function Rad({ r, andra, kalla }: { r: Rad; andra: Props["andra"]; kalla: Kalla 
               <span>{r.datum}</span>
               <span>· {r.formular}</span>
               {r.doman && <span>· {r.doman}</span>}
-              {r.typ && <span className="badge">{r.typ}</span>}
+              {(r.typ || r.typ_kod) && <span className="badge">{admin ? r.typ : forfraganEtikett(r.typ_kod, r.avsandare_kod)}</span>}
             </div>
             {r.text && (
               <>
@@ -77,7 +85,7 @@ function Rad({ r, andra, kalla }: { r: Rad; andra: Props["andra"]; kalla: Kalla 
             {r.geo && <span className="badge">geografi: {r.geo}</span>}
             {r.sasong && <span className="badge">säsong: {r.sasong}</span>}
             {r.strikt && <span className="badge">strikt storlek: {r.strikt}</span>}
-            {!r.geo && !r.sasong && <span>Geografi och säsong gissas av Jev.</span>}
+            {!r.geo && !r.sasong && <span>Geografi och säsong fylls i automatiskt.</span>}
           </div>
         )}
       </div>
@@ -108,9 +116,9 @@ function Rad({ r, andra, kalla }: { r: Rad; andra: Props["andra"]; kalla: Kalla 
           />
         </div>
       </div>
-      {(r.kommentar || saknarBolag) && (
+      {(kommentar || saknarBolag) && (
         <p className={`note${saknarBolag ? " warn" : ""}`}>
-          {saknarBolag ? "Fyll i bolagsnamn eller org.nr, annars hoppas raden över." : kommentarText(r.kommentar!)}
+          {saknarBolag ? "Fyll i bolagsnamn eller org.nr, annars hoppas raden över." : kommentar}
         </p>
       )}
       {r.forslag && !harBolag(r) && (
@@ -121,7 +129,7 @@ function Rad({ r, andra, kalla }: { r: Rad; andra: Props["andra"]; kalla: Kalla 
             style={{ minHeight: 36, padding: "4px 12px", fontSize: 13 }}
             onClick={() => andra(r.id, { namn: r.forslag!.namn, org: r.forslag!.org_nr, vald: true })}
           >
-            Använd förslaget: {r.forslag.namn}
+            Är det {r.forslag.namn}? Använd
           </button>
         </p>
       )}
@@ -171,7 +179,7 @@ export default function Granska(p: Props) {
             </p>
             <ul className="review-list">
               {rader.map((r) => (
-                <Rad key={r.id} r={r} andra={p.andra} kalla={p.kalla} />
+                <Rad key={r.id} r={r} andra={p.andra} kalla={p.kalla} admin={p.admin} />
               ))}
             </ul>
           </>
@@ -199,6 +207,7 @@ export default function Granska(p: Props) {
         <button type="button" className="btn" onClick={p.onTillbaka}>
           ← Tillbaka
         </button>
+        {p.admin && (
         <div className="budget">
           <label htmlFor="maxtic">Max tic.io-anrop</label>
           <input
@@ -214,6 +223,7 @@ export default function Granska(p: Props) {
             Lokala branscher klaras oftast med bolagsdataapi (0 anrop). Sparade sökningar kostar inget.
           </span>
         </div>
+        )}
         <button type="button" className="btn btn-primary" aria-disabled={!valda.length} onClick={() => valda.length && p.onKor()}>
           Hitta tvillingar för {valda.length} bolag →
         </button>

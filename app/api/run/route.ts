@@ -39,7 +39,13 @@ export interface ResultRow {
   kall_sni?: string;
   kall_lan?: string | null;
   kall_matchning?: string | null;
-  urval?: string | null;
+  urval?: string | null; // teknisk text (adminvyn)
+  // Strukturerat, för klartext i gränssnittet:
+  urval_kod?: string | null;
+  tic_tak?: boolean;
+  lokal?: boolean;
+  sasong_kod?: string | null;
+  status_kod?: "tvilling" | "ej_hittat" | "ingen_sni" | "inga_tvillingar" | "dublett" | "fel";
   geografi_relevant?: string;
   storlek_strikt?: string;
   sasongseffekt?: string;
@@ -111,13 +117,20 @@ async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
   try {
     res = lead.resolved ?? (await resolveSourceCompany(lead.namn, tic, bolagsdataKey, typesafeKey, lead.orgNr || undefined));
   } catch (e: any) {
-    return [{ ...bas, status: `fel vid bolagssökning: ${e.message || e}` }];
+    return [{ ...bas, status_kod: "fel", status: `fel vid bolagssökning: ${e.message || e}` }];
   }
   const source: Company | null = res.company;
-  if (!source) return [{ ...bas, kall_matchning: res.matchning, status: `ej hittat: ${res.matchning}` }];
+  if (!source) return [{ ...bas, kall_matchning: res.matchning, status_kod: "ej_hittat", status: `ej hittat: ${res.matchning}` }];
   if (!source.sni_codes?.length) {
     return [
-      { ...bas, kall_org_nr: source.org_nr, kall_namn: source.name, kall_matchning: source.matchning, status: "ingen SNI-kod hittad" },
+      {
+        ...bas,
+        kall_org_nr: source.org_nr,
+        kall_namn: source.name,
+        kall_matchning: source.matchning,
+        status_kod: "ingen_sni",
+        status: "ingen SNI-kod hittad",
+      },
     ];
   }
 
@@ -134,7 +147,7 @@ async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
   try {
     ticSource = res.ticSource ?? (await fetchTicSource(source, tic));
   } catch (e: any) {
-    return [{ ...gemensamGrund, status: `fel vid tic.io-sökning: ${e.message || e}` }];
+    return [{ ...gemensamGrund, status_kod: "fel", status: `fel vid tic.io-sökning: ${e.message || e}` }];
   }
 
   // Ifyllda CSV-celler gäller. Tomma geografi/säsong-celler gissar Jev
@@ -169,16 +182,21 @@ async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
     geografi_relevant: geografiInfo,
     storlek_strikt: options.storlek_strikt ? "ja" : "nej",
     sasongseffekt: sasongInfo,
+    lokal: options.geografi_relevant,
+    sasong_kod: options.sasongseffekt || null,
   };
 
   let twins: Twin[] = [];
   let urval = "";
+  let urval_kod = "";
+  let tic_tak = false;
   try {
-    ({ twins, urval } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
+    ({ twins, urval, urval_kod, tic_tak } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
   } catch (e: any) {
-    return [{ ...gemensam, status: `fel vid tvillingsökning: ${e.message || e}` }];
+    return [{ ...gemensam, status_kod: "fel", status: `fel vid tvillingsökning: ${e.message || e}` }];
   }
-  if (!twins.length) return [{ ...gemensam, urval, status: "inga tvillingar hittade" }];
+  const urvalFalt = { urval, urval_kod, tic_tak };
+  if (!twins.length) return [{ ...gemensam, ...urvalFalt, status_kod: "inga_tvillingar", status: "inga tvillingar hittade" }];
 
   const rows: ResultRow[] = [];
   for (const twin of twins) {
@@ -187,7 +205,8 @@ async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
     }
     rows.push({
       ...gemensam,
-      urval,
+      ...urvalFalt,
+      status_kod: "tvilling",
       tvilling_org_nr: twin.org_nr,
       tvilling_namn: twin.name,
       tvilling_oms: twin.net_revenue ?? null,
@@ -250,7 +269,9 @@ export async function POST(req: NextRequest) {
         // Ett bolag med flera förfrågningar tvillingsöks en gång.
         const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
         if (sedda.has(nyckel)) {
-          rader = [{ ...lead.extra, lead_foretagsnamn: namn || orgNr, status: "dublett: samma bolag finns tidigare i listan" }];
+          rader = [
+            { ...lead.extra, lead_foretagsnamn: namn || orgNr, status_kod: "dublett", status: "dublett: samma bolag finns tidigare i listan" },
+          ];
         } else {
           sedda.add(nyckel);
           rader = await processLead(

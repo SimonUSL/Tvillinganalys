@@ -1,4 +1,5 @@
 import type { ResultRow } from "../api/run/route";
+import { likhetText, statusText } from "./klartext";
 
 export type Steg = "underlag" | "granska" | "resultat";
 export type Kalla = "export" | "csv";
@@ -15,7 +16,11 @@ export interface Rad {
   datum?: string;
   formular?: string;
   doman?: string | null;
-  typ?: string;
+  typ?: string; // teknisk beskrivning (admin)
+  typ_kod?: string | null;
+  avsandare_kod?: string | null;
+  hoppa_kod?: string | null;
+  matchning_kod?: string | null;
   text?: string;
   kommentar?: string; // Jevs matchning eller orsaken till att den hoppas över
   forslag?: { namn: string; org_nr: string }; // osäkert förslag som kan godtas med ett klick
@@ -64,15 +69,40 @@ export const KOLUMNER: { key: keyof ResultRow; label: string }[] = [
   { key: "status", label: "Status" },
 ];
 
-// Bara kolumner som har värden exporteras.
-export function laddaNerCsv(rows: ResultRow[], filnamn: string) {
-  const kolumner = KOLUMNER.filter((c) => rows.some((r) => r[c.key] !== null && r[c.key] !== undefined && r[c.key] !== ""));
+// Kundens export: bara det som behövs för att arbeta med tvillingarna, i klartext.
+type Kolumn = { key: keyof ResultRow | "kommentar"; label: string; varde?: (r: ResultRow) => unknown };
+const KUND_KOLUMNER: Kolumn[] = [
+  { key: "forfragan_datum", label: "Datum" },
+  { key: "forfragan_formular", label: "Formulär" },
+  { key: "forfragan_typ", label: "Förfrågan" },
+  { key: "forfragan_text", label: "Meddelande" },
+  { key: "kall_namn", label: "Bolag", varde: (r) => r.kall_namn || r.lead_foretagsnamn },
+  { key: "kall_org_nr", label: "Org.nr" },
+  { key: "tvilling_namn", label: "Tvilling" },
+  { key: "tvilling_org_nr", label: "Tvilling org.nr" },
+  { key: "tvilling_likhet", label: "Likhet", varde: (r) => likhetText(r.tvilling_likhet) },
+  { key: "tvilling_ort", label: "Ort" },
+  { key: "tvilling_lan", label: "Län" },
+  { key: "tvilling_oms", label: "Omsättning (kr)" },
+  { key: "tvilling_anstallda", label: "Anställda" },
+  { key: "tvilling_verksamhet", label: "Verksamhet" },
+  { key: "kontakt_namn", label: "Kontakt" },
+  { key: "kontakt_mejl", label: "Mejl" },
+  { key: "kontakt_telefon", label: "Telefon" },
+  { key: "kommentar", label: "Kommentar", varde: (r) => (r.tvilling_namn ? "" : statusText(r.status_kod)) },
+];
+
+// Bara kolumner som har värden exporteras. Adminvyn får alla tekniska kolumner.
+export function laddaNerCsv(rows: ResultRow[], filnamn: string, admin = false) {
+  const alla: Kolumn[] = admin ? KOLUMNER : KUND_KOLUMNER;
+  const hamta = (r: ResultRow, k: Kolumn) => (k.varde ? k.varde(r) : (r as any)[k.key]);
+  const kolumner = alla.filter((c) => rows.some((r) => { const v = hamta(r, c); return v !== null && v !== undefined && v !== ""; }));
   const cell = (v: unknown) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const rader = [kolumner.map((k) => cell(k.label)).join(",")];
-  for (const r of rows) rader.push(kolumner.map((k) => cell(r[k.key])).join(","));
+  for (const r of rows) rader.push(kolumner.map((k) => cell(hamta(r, k))).join(","));
   // BOM så att Excel läser å/ä/ö rätt.
   const blob = new Blob(["﻿" + rader.join("\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
