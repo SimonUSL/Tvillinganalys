@@ -65,7 +65,7 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `FORETAGSKONTAKT_API_KEY` | Valfri, obekräftad integration för kontaktpersoner. |
 | `SITE_PASSWORD` / `SITE_USERNAME` | Valfritt inloggningsskydd för kundvyn. |
 | `ADMIN_PASSWORD` | Lösenord till teamets adminvy (`/admin`). Saknas den är adminvyn stängd. |
-| `WEBFLOW_WEBHOOK_SECRET` | Hemlig nyckel i Webflow-webhookens URL. Saknas den tas inga webhooks emot. |
+| `WEBFLOW_WEBHOOK_SECRET` | Webhookens "secret key" från Webflow (64 tecken). Appen kontrollerar Webflows signatur (`x-webflow-signature`) med den; alternativt godtas samma värde som `?nyckel=` i URL:en. Saknas den tas inga webhooks emot. |
 | `RESEND_API_KEY` | Nyckel till Resend för automatiska mejl. |
 | `MAIL_FROM` | Avsändare, t.ex. `Tvillinganalys <tvillingar@upstrategylab.com>` (domänen verifierad i Resend). |
 | `MAIL_TO` | Mottagare av automatiska mejl, kommaseparerade. |
