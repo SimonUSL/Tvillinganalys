@@ -54,6 +54,14 @@ export interface ResultRow {
   tvilling_likhet?: string | null;
   tvilling_poang?: number | null;
   tvilling_verksamhet?: string | null;
+  beslutsfattare?: string | null;
+  bolag_epost?: string | null;
+  bolag_telefon?: string | null;
+  bolag_webb?: string | null;
+  // Avsändarens uppgifter ur formuläret (automatiska mejl).
+  forfragan_namn?: string | null;
+  forfragan_epost?: string | null;
+  forfragan_telefon?: string | null;
   kontakt_namn?: string | null;
   kontakt_mejl?: string | null;
   kontakt_telefon?: string | null;
@@ -189,6 +197,10 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
       tvilling_likhet: twin.likhet ?? null,
       tvilling_poang: twin.poang ?? null,
       tvilling_verksamhet: twin.verksamhet ?? null,
+      beslutsfattare: twin.kontakt?.beslutsfattare ?? null,
+      bolag_epost: twin.kontakt?.epost ?? null,
+      bolag_telefon: twin.kontakt?.telefon ?? null,
+      bolag_webb: twin.kontakt?.webb ?? null,
       kontakt_namn: twin.contact_name ?? null,
       kontakt_mejl: twin.contact_email ?? null,
       kontakt_telefon: twin.contact_phone ?? null,

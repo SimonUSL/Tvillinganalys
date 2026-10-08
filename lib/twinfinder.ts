@@ -1,4 +1,5 @@
 import { cacheGet, cacheNyckel, cacheSet } from "./cache";
+import { Kontakt, kontaktFranBolagsdata, kontaktFranTic, slaIhop } from "./kontakt";
 
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
 //
@@ -27,6 +28,8 @@ export interface Company {
   contact_name?: string | null;
   contact_email?: string | null;
   contact_phone?: string | null;
+  // Bolagets e-post, telefon, webbplats och beslutsfattare ur registren.
+  kontakt?: Kontakt;
   // Hur kallbolaget valdes bland sökträffarna, t.ex. "Jev 94 %" eller
   // "osäker (Jev 41 %) – kontrollera".
   matchning?: string | null;
@@ -461,6 +464,7 @@ export async function bolagsdataDetails(
     lan: c.county_name ?? null,
     ort: c.postal_town ?? hit?.postal_town ?? null,
     matchning,
+    kontakt: kontaktFranBolagsdata(c),
   };
   const ticSource: TicSource = {
     profile: {
@@ -592,7 +596,7 @@ function ticSearch(tic: Tic, body: Record<string, any>): Promise<TicHits> {
 const TIC_CACHE_FALT = [
   "registrationNumber", "names", "legalEntityType", "mostRecentPurpose", "sniCodes", "mostRecentFinancialSummary",
   "cNbrEmployeesInterval", "hyperlinks", "registeredOffices", "registeredOfficeCountyCode",
-  "mostRecentRegisteredAddress", "currentBeneficialOwners",
+  "mostRecentRegisteredAddress", "currentBeneficialOwners", "phoneNumbers", "emailAddresses", "currentRepresentatives",
 ];
 function trimTicDoc(doc: any): any {
   const ut: any = {};
@@ -600,11 +604,22 @@ function trimTicDoc(doc: any): any {
   if (ut.names) ut.names = ut.names.slice(0, 1);
   if (ut.hyperlinks) ut.hyperlinks = ut.hyperlinks.slice(0, 3);
   if (ut.currentBeneficialOwners) ut.currentBeneficialOwners = ut.currentBeneficialOwners.map((o: any) => ({ throughName: o.throughName }));
+  if (ut.phoneNumbers) ut.phoneNumbers = ut.phoneNumbers.slice(0, 3).map((t: any) => ({ e164PhoneNumber: t.e164PhoneNumber }));
+  if (ut.emailAddresses) ut.emailAddresses = ut.emailAddresses.slice(0, 5).map((e: any) => ({ emailAddress: e.emailAddress }));
+  // Bara namn och roll - aldrig personnummer.
+  if (ut.currentRepresentatives)
+    ut.currentRepresentatives = ut.currentRepresentatives.map((r: any) => ({
+      fullName: r.fullName,
+      positionDescription: r.positionDescription,
+      positionType: r.positionType,
+      isProtected: r.isProtected,
+    }));
   return ut;
 }
 
 async function ticSearchUncached(tic: Tic, body: Record<string, any>): Promise<TicHits> {
-  const nyckel = cacheNyckel("tic", body);
+  // "tic2": posterna innehåller kontaktuppgifter (äldre "tic"-poster saknar dem).
+  const nyckel = cacheNyckel("tic2", body);
   const sparad = await cacheGet<{ found: number; docs: any[] }>(nyckel);
   if (sparad) {
     tic.cacheTraffar++;
@@ -1187,6 +1202,7 @@ export async function findTwins(
           lan: candLan,
           ort: docGet(doc, "mostRecentRegisteredAddress.city", "ort"),
           verksamhet: profile.business_description,
+          kontakt: kontaktFranTic(doc),
         };
         pool.push({ profile, company });
         koncernInfo.set(company, {
@@ -1260,7 +1276,9 @@ export async function findTwins(
   if (!typesafeKey) return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
-  return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: kvar.slice(0, MAX_TWINS_PER_LEAD) };
+  const slutliga = kvar.slice(0, MAX_TWINS_PER_LEAD);
+  await fyllKontakter(slutliga, tic);
+  return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: slutliga };
 }
 
 // --- Fas 0: kandidater från bolagsdataapi --------------------------------
@@ -1407,6 +1425,27 @@ async function bolagsdataCandidates(
     (lan ? `, ${bolagsdataLan(lan)}` : "") +
     (params.oms_min ? ", liknande omsättning" : "");
   return { pool, urval, logg };
+}
+
+// Tvillingar från bolagsdataapi saknar beslutsfattare: hämta alla på en gång
+// (ett tic.io-anrop för upp till 10 bolag). Når vi taket hoppas det över.
+async function fyllKontakter(twins: Twin[], tic: Tic): Promise<void> {
+  const saknas = twins.filter((t) => !t.kontakt?.beslutsfattare);
+  if (!saknas.length || !ticBudgetKvar(tic)) return;
+  try {
+    const docs = await ticSearch(tic, {
+      q: "*",
+      query_by: "registrationNumber",
+      filter_by: `registrationNumber:[${saknas.map((t) => t.org_nr).join(",")}]`,
+      per_page: saknas.length,
+    });
+    for (const doc of docs) {
+      const t = saknas.find((x) => x.org_nr === normOrgNr(doc.registrationNumber));
+      if (t) t.kontakt = slaIhop(t.kontakt, kontaktFranTic(doc));
+    }
+  } catch (e: any) {
+    if (!(e instanceof TicBudgetSlut)) console.log(JSON.stringify({ steg: "kontakter", fel: String(e.message || e) }));
+  }
 }
 
 // --- Steg 4b: bara ett bolag per koncern bland tvillingarna --------------

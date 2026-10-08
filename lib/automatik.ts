@@ -63,7 +63,11 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
         forfragan_formular: f.formular,
         forfragan_doman: f.doman,
         forfragan_typ: etikett,
-        forfragan_text: utanPersonuppgifter(f.meddelande).replace(/\s+/g, " ").slice(0, 300),
+        // Säljarnas eget mejl: hela förfrågan med avsändarens uppgifter (inte maskad).
+        forfragan_namn: f.namn || null,
+        forfragan_epost: f.epost || null,
+        forfragan_telefon: f.telefon || null,
+        forfragan_text: f.meddelande.replace(/\s+/g, " ").trim(),
       },
     },
     {
@@ -93,19 +97,39 @@ const esc = (s: unknown) =>
   String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9åäö]+/g, "-").replace(/^-|-$/g, "");
 const mkr = (kr?: number | null) =>
-  kr == null ? "–" : `${(kr / 1e6).toLocaleString("sv-SE", { maximumFractionDigits: kr < 1e7 ? 1 : 0 })} Mkr`;
+  kr == null ? "–" : `${(Math.max(0, kr) / 1e6).toLocaleString("sv-SE", { maximumFractionDigits: kr < 1e7 ? 1 : 0 })} Mkr`;
 
 const RAM = (inne: string) => `<!doctype html><html lang="sv"><body style="margin:0;background:#f6f7f9;font-family:Arial,Helvetica,sans-serif;color:#2b2b2b">
-<div style="max-width:720px;margin:0 auto;padding:24px 16px">
+<div style="max-width:900px;margin:0 auto;padding:24px 16px">
 <div style="background:#ffffff;border:1px solid #eef0f3;border-radius:10px;padding:24px">${inne}</div>
 <p style="font-size:12px;color:#74747a;margin:14px 4px">Skickat automatiskt av Tvillinganalys · <a href="${APP_URL}" style="color:#74747a">Öppna verktyget</a></p>
 </div></body></html>`;
 
+// Hela förfrågan med avsändarens uppgifter - mejlet går till säljarna själva.
 function citat(f: Forfragan): string {
-  const text = utanPersonuppgifter(f.meddelande).trim();
-  if (!text) return "";
-  const kort = text.length > 600 ? `${text.slice(0, 600)}…` : text;
-  return `<div style="border-left:3px solid #eb5f62;background:#fdeced;padding:10px 14px;margin:14px 0;font-size:14px;white-space:pre-wrap">${esc(kort)}</div>`;
+  const rader = [
+    ["Namn", esc(f.namn)],
+    ["E-post", f.epost ? `<a href="mailto:${esc(f.epost)}" style="color:#c9474a">${esc(f.epost)}</a>` : ""],
+    ["Telefon", f.telefon ? `<a href="tel:${esc(f.telefon.replace(/[^\d+]/g, ""))}" style="color:#c9474a">${esc(f.telefon)}</a>` : ""],
+  ]
+    .filter(([, v]) => v)
+    .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#74747a">${k}</td><td style="padding:2px 0">${v}</td></tr>`)
+    .join("");
+  const text = f.meddelande.trim();
+  return `<div style="border-left:3px solid #eb5f62;background:#fdeced;padding:10px 14px;margin:14px 0;font-size:14px">
+${rader ? `<table style="border-collapse:collapse;font-size:14px;margin-bottom:${text ? 8 : 0}px">${rader}</table>` : ""}
+${text ? `<div style="white-space:pre-wrap">${esc(text)}</div>` : ""}
+</div>`;
+}
+
+function kontaktCell(t: ResultRow): string {
+  const delar = [
+    t.beslutsfattare ? esc(t.beslutsfattare) : "",
+    t.bolag_telefon ? `<a href="tel:${esc(t.bolag_telefon.replace(/[^\d+]/g, ""))}" style="color:#c9474a">${esc(t.bolag_telefon)}</a>` : "",
+    t.bolag_epost ? `<a href="mailto:${esc(t.bolag_epost)}" style="color:#c9474a">${esc(t.bolag_epost)}</a>` : "",
+    t.bolag_webb ? `<a href="${esc(/^https?:/.test(t.bolag_webb) ? t.bolag_webb : "https://" + t.bolag_webb)}" style="color:#c9474a">webbplats</a>` : "",
+  ].filter(Boolean);
+  return delar.length ? delar.join("<br>") : "–";
 }
 
 function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string {
@@ -123,6 +147,7 @@ function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string 
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;text-align:right">${esc(t.tvilling_anstallda ?? "–")}</td>
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;font-size:12px;color:#4a4a50">${esc((t.tvilling_verksamhet || "").slice(0, 140))}${(t.tvilling_verksamhet || "").length > 140 ? "…" : ""}</td>
 <td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;font-size:12px;white-space:nowrap">${esc(likhetText(t.tvilling_likhet))}</td>
+<td style="padding:8px;border-bottom:1px solid #eef0f3;vertical-align:top;font-size:12px">${kontaktCell(t)}</td>
 </tr>`
     )
     .join("");
@@ -133,7 +158,7 @@ function tvillingMejl(f: Forfragan, etikett: string, rows: ResultRow[]): string 
 ${citat(f)}
 ${fakta ? `<p style="font-size:13px;color:#4a4a50;margin:0 0 12px">${esc(fakta)}</p>` : ""}
 <table style="width:100%;border-collapse:collapse;font-size:13px">
-<tr>${th("Bolag")}${th("Ort")}${th("Omsättning", true)}${th("Anställda", true)}${th("Verksamhet")}${th("Likhet")}</tr>
+<tr>${th("Bolag")}${th("Ort")}${th("Omsättning", true)}${th("Anställda", true)}${th("Verksamhet")}${th("Likhet")}${th("Kontakt")}</tr>
 ${rader}
 </table>
 <p style="font-size:13px;color:#4a4a50;margin:16px 0 0">Hela listan finns som bilaga (öppnas i Excel).</p>`);

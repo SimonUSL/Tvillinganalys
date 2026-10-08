@@ -14,7 +14,7 @@ interface Props {
 }
 
 const mkr = (kr: number | null | undefined) =>
-  kr === null || kr === undefined ? "–" : `${(kr / 1e6).toLocaleString("sv-SE", { maximumFractionDigits: kr < 1e7 ? 1 : 0 })} Mkr`;
+  kr === null || kr === undefined ? "–" : `${(Math.max(0, kr) / 1e6).toLocaleString("sv-SE", { maximumFractionDigits: kr < 1e7 ? 1 : 0 })} Mkr`;
 
 function likhetBadge(text: string | null | undefined, admin: boolean) {
   if (!text) return null;
@@ -27,6 +27,9 @@ function likhetBadge(text: string | null | undefined, admin: boolean) {
         : "badge-warn";
   return <span className={`badge ${klass}`}>{admin ? text.replace(/\s*\(.*\)$/, "") : likhetText(text)}</span>;
 }
+
+const harKontakt = (t: ResultRow) =>
+  !!(t.kontakt_namn || t.kontakt_mejl || t.beslutsfattare || t.bolag_epost || t.bolag_telefon || t.bolag_webb);
 
 // Statusen förklarad i klartext för leads utan tvillingar.
 function forklaring(status: string, urval?: string | null): string {
@@ -117,7 +120,7 @@ function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: Resul
                   <th scope="col">Omsättning</th>
                   <th scope="col">Anställda</th>
                   <th scope="col">Verksamhet</th>
-                  {tvillingar.some((t) => t.kontakt_mejl || t.kontakt_namn) && <th scope="col">Kontakt</th>}
+                  {tvillingar.some(harKontakt) && <th scope="col">Kontakt</th>}
                 </tr>
               </thead>
               <tbody>
@@ -141,10 +144,26 @@ function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows: Resul
                           : t.tvilling_verksamhet
                         : "–"}
                     </td>
-                    {tvillingar.some((x) => x.kontakt_mejl || x.kontakt_namn) && (
-                      <td>
-                        {t.kontakt_namn}
-                        {t.kontakt_mejl && <div className="hint">{t.kontakt_mejl}</div>}
+                    {tvillingar.some(harKontakt) && (
+                      <td style={{ fontSize: 13, minWidth: 180 }}>
+                        {t.kontakt_namn || t.beslutsfattare}
+                        {(t.kontakt_telefon || t.bolag_telefon) && (
+                          <div>
+                            <a href={`tel:${(t.kontakt_telefon || t.bolag_telefon)!.replace(/[^\d+]/g, "")}`}>{t.kontakt_telefon || t.bolag_telefon}</a>
+                          </div>
+                        )}
+                        {(t.kontakt_mejl || t.bolag_epost) && (
+                          <div>
+                            <a href={`mailto:${t.kontakt_mejl || t.bolag_epost}`}>{t.kontakt_mejl || t.bolag_epost}</a>
+                          </div>
+                        )}
+                        {t.bolag_webb && (
+                          <div>
+                            <a href={/^https?:/.test(t.bolag_webb) ? t.bolag_webb : `https://${t.bolag_webb}`} target="_blank" rel="noreferrer">
+                              webbplats
+                            </a>
+                          </div>
+                        )}
                       </td>
                     )}
                   </tr>

@@ -18,6 +18,7 @@ Varje formulärinskick på webbplatsen skickas av Webflow till `/api/webflow?nyc
 - **Osäkert bolag:** kort mejl "Ny förfrågan – vilket bolag?" med förfrågan och uppmaning att lägga in bolaget i verktyget.
 - **Bolaget hittat:** tvillingsökning (högst 4 tic.io-anrop) och mejl "Förslag på tvillingar: X (N bolag)" med tabell och Excel-bilaga till `MAIL_TO`.
 - Samma inskick hanteras en gång (7 dagar), samma bolag får tvillingar högst en gång per 30 dagar (kräver Redis-cachen).
+- Mejlet innehåller hela förfrågan (avsändarens namn, e-post, telefon, meddelande) och för varje tvilling kontaktuppgifter ur registren (`lib/kontakt.ts`): beslutsfattare med roll (VD, ordförande, innehavare, delägare, styrelseledamot – från tic.io, aldrig personnummer eller skyddade identiteter), bolagets e-post (egen domän först), telefon och webbplats. Tvillingar från bolagsdataapi får beslutsfattare via ett gemensamt tic.io-anrop (upp till 10 bolag). När företagskontakt.se-API:t finns kompletterar det med specifik kontaktperson.
 
 Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifierad i Resend). Saknas `RESEND_API_KEY` loggas mejlen bara (torrkörning). Lokalt sparar `MAIL_TORR_MAPP=<mapp>` mejlen som HTML-filer.
 

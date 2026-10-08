@@ -36,6 +36,8 @@ export interface Forfragan {
   doman: string | null;
   gratismejl: boolean;
   meddelande: string;
+  namn: string; // avsändarens namn, om formuläret har ett namnfält
+  telefon: string;
 }
 
 // "10/07/2026 8:58:20 am" (månad/dag/år, 12-timmarsklocka)
@@ -87,7 +89,17 @@ export function forfraganFranFalt(falt: Record<string, unknown>, formular: strin
     .map(([, v]) => v.trim().replace(/^"+|"+$/g, ""))
     .join("\n");
   const doman = epost.includes("@") ? epost.split("@")[1] : null;
-  return { formular, datum, epost, doman, gratismejl: !!doman && GRATISMEJL.has(doman), meddelande };
+  const forsta = (re: RegExp) => varden.find(([k, v]) => re.test(k) && v.trim())?.[1].trim() || "";
+  return {
+    formular,
+    datum,
+    epost,
+    doman,
+    gratismejl: !!doman && GRATISMEJL.has(doman),
+    meddelande,
+    namn: forsta(/^(name|namn)( \d)?$|full ?name|ditt namn/i),
+    telefon: forsta(/phone|telefon|^tel/i),
+  };
 }
 
 // Webflow-formulärets namn ("Book a demo form", "Get offer request form" ...) -> vårt namn.
