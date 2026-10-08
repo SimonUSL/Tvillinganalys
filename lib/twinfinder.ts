@@ -168,7 +168,7 @@ async function pickSourceHit(
                 "A subsidiary, property company or holding company that only shares the brand is not the same company as the group's main company named in `lead_name`.",
                 "Prefer the candidate whose name matches `lead_name` most closely, ignoring legal-form suffixes such as AB, (publ), HB, KB and differences in case, spacing or punctuation.",
                 kontext
-                  ? "Prefer an active organisation over one that is dissolved, bankrupt, in liquidation or deregistered. The sender may be a company, an association or a public body - follow what the message says."
+                  ? "Compare what the message says the sender does, sells or plans with each candidate's `business_description`. This matters more than the name: several companies can share a name, and the right one is the one whose business fits the message. Prefer an active organisation over one that is dissolved, bankrupt, in liquidation or deregistered. The sender may be a company, an association or a public body - follow what the message says."
                   : "The lead is a business customer: prefer an active operating company over one that is dissolved, bankrupt, in liquidation or deregistered, and over housing cooperatives (bostadsrättsförening), non-profit associations, foundations or clubs that merely share the name.",
                 "If both an operating company and its holding or parent company match, prefer the one with actual operations (revenue, employees).",
                 "Choose `ingen` only if no candidate is plausibly the same company.",
@@ -380,13 +380,38 @@ export async function resolveViaBolagsdata(
   }
   if (!hits.length) return { company: null, matchning: "bolagsdataapi gav inga träffar på namnet" };
 
-  const { index, matchning, forslag } = await pickSourceHit(companyName, hits.map(candidateSummary), typesafeKey, kontext);
+  // Från en förfrågan: hämta verksamhetsbeskrivningen för de främsta träffarna
+  // så att Jev kan jämföra med vad avsändaren skriver. Namnlika bolag skiljs
+  // ofta bara åt av verksamheten ("Assistansgruppen" = personlig assistans i
+  // Tollarp, men vägassistans i Kronoberg - förfrågan gällde fordonsägare).
+  const urval = kontext ? hits.slice(0, KONTEXT_DETALJER) : hits;
+  const kandidater = urval.map(candidateSummary) as Record<string, any>[];
+  const detaljer: (any | null)[] = kontext
+    ? await mapLimit(urval, KONTEXT_DETALJER, (h) =>
+        bolagsdataGet(`/company/${normOrgNr(h.org_nr)}`, bolagsdataKey).catch(() => null)
+      )
+    : [];
+  detaljer.forEach((d, i) => {
+    const c = d?.company;
+    if (!c) return;
+    kandidater[i] = {
+      ...kandidater[i],
+      business_description: (c.business_description || "").slice(0, 300) || undefined,
+      county: c.county_name || undefined,
+      legal_form: c.legal_form_text || undefined,
+    };
+  });
+
+  const { index, matchning, forslag } = await pickSourceHit(companyName, kandidater, typesafeKey, kontext);
   if (index === null) {
-    const h = forslag !== undefined ? hits[forslag] : null;
+    const h = forslag !== undefined ? urval[forslag] : null;
     return { company: null, matchning, ...(h ? { forslag: { namn: h.name, org_nr: normOrgNr(h.org_nr) } } : {}) };
   }
-  return bolagsdataDetails(hits[index].org_nr, bolagsdataKey, hits[index], matchning);
+  return bolagsdataDetails(urval[index].org_nr, bolagsdataKey, urval[index], matchning, detaljer[index] ?? undefined);
 }
+
+// Så många namnträffar får verksamhetsbeskrivning när bolaget ska hittas ur en förfrågan.
+const KONTEXT_DETALJER = 5;
 
 // Detaljanropet ger verksamhetsbeskrivning, län och SNI-koder. Storlek finns
 // bara i sökträffen (hit), så vid uppslag på org.nr saknas den.
@@ -394,11 +419,12 @@ export async function bolagsdataDetails(
   orgNr: string,
   bolagsdataKey: string,
   hit: any | null,
-  matchning: string
+  matchning: string,
+  forladdad?: any // redan hämtade detaljer - inget nytt anrop
 ): Promise<SourceResult> {
   let data: any;
   try {
-    data = await bolagsdataGet(`/company/${orgNr}`, bolagsdataKey);
+    data = forladdad ?? (await bolagsdataGet(`/company/${orgNr}`, bolagsdataKey));
   } catch (e: any) {
     if (!hit) return { company: null, matchning: `bolagsdataapi hittade inte org.nr ${orgNr}` };
     data = {};
