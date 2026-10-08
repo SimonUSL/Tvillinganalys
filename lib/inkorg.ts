@@ -62,24 +62,7 @@ export function parseFormExports(filer: { name: string; text: string }[], fran: 
     for (const rad of parseCsv(fil.text.replace(/^﻿/, ""))) {
       const datum = parseDatum(rad.Date || "");
       if (!datum || datum < fran || datum > till) continue;
-      const epost =
-        Object.entries(rad)
-          .find(([k, v]) => k.toLowerCase().includes("mail") && v.includes("@"))?.[1]
-          .trim()
-          .toLowerCase() || "";
-      const meddelande = Object.entries(rad)
-        .filter(([k, v]) => MEDDELANDEKOLUMNER.has(k.toLowerCase()) && v.trim())
-        .map(([, v]) => v.trim().replace(/^"+|"+$/g, ""))
-        .join("\n");
-      const doman = epost.includes("@") ? epost.split("@")[1] : null;
-      alla.push({
-        formular: formularNamn(fil.name),
-        datum,
-        epost,
-        doman,
-        gratismejl: !!doman && GRATISMEJL.has(doman),
-        meddelande,
-      });
+      alla.push(forfraganFranFalt(rad, formularNamn(fil.name), datum));
     }
   }
   alla.sort((a, b) => a.datum.getTime() - b.datum.getTime());
@@ -92,6 +75,23 @@ export function parseFormExports(filer: { name: string; text: string }[], fran: 
   }
   return unika;
 }
+
+// En förfrågan ur formulärets fält (en exportrad eller en Webflow-webhook -
+// fälten heter likadant). E-post: första fältet med "mail" i namnet som
+// innehåller ett @; meddelandet: de kända meddelandefälten.
+export function forfraganFranFalt(falt: Record<string, unknown>, formular: string, datum: Date): Forfragan {
+  const varden = Object.entries(falt).map(([k, v]) => [k, typeof v === "string" ? v : v == null ? "" : String(v)] as const);
+  const epost = varden.find(([k, v]) => k.toLowerCase().includes("mail") && v.includes("@"))?.[1].trim().toLowerCase() || "";
+  const meddelande = varden
+    .filter(([k, v]) => MEDDELANDEKOLUMNER.has(k.toLowerCase()) && v.trim())
+    .map(([, v]) => v.trim().replace(/^"+|"+$/g, ""))
+    .join("\n");
+  const doman = epost.includes("@") ? epost.split("@")[1] : null;
+  return { formular, datum, epost, doman, gratismejl: !!doman && GRATISMEJL.has(doman), meddelande };
+}
+
+// Webflow-formulärets namn ("Book a demo form", "Get offer request form" ...) -> vårt namn.
+export const formularFranNamn = (namn: string) => formularNamn(namn.replace(/\s+/g, "-"));
 
 // E-postadresser och telefonnummer skickas aldrig till Jev.
 export function utanPersonuppgifter(text: string): string {

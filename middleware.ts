@@ -3,7 +3,8 @@ import { verifySessionToken } from "@/lib/auth";
 
 const SESSION_COOKIE = "tvillinganalys_session";
 const ADMIN_COOKIE = "tvillinganalys_admin";
-const PUBLIC_PATHS = ["/login", "/api/login", "/admin/login", "/api/admin-login"];
+// /api/webflow skyddas av sin egen hemliga nyckel (WEBFLOW_WEBHOOK_SECRET).
+const PUBLIC_PATHS = ["/login", "/api/login", "/admin/login", "/api/admin-login", "/api/webflow"];
 
 // Kundens app (/) skyddas av SITE_PASSWORD (och valfritt SITE_USERNAME);
 // saknas SITE_PASSWORD är den oskyddad, som innan.

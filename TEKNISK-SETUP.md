@@ -10,6 +10,17 @@ Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas a
 - Ingen databas. All state är cookies (inloggning) eller körs i minnet per request.
 - Funktionerna körs i Stockholm (`regions: ["arn1"]` i `vercel.json`) — tic.io tar bara emot anrop från SE/NO/DK/FI/DE.
 
+## Automatik: nya leads från Webflow — `app/api/webflow`, `lib/automatik.ts`
+
+Varje formulärinskick på webbplatsen skickas av Webflow till `/api/webflow?nyckel=<WEBFLOW_WEBHOOK_SECRET>` (Webflow → Site settings → Apps & integrations → Webhooks → *Form submission*). Appen svarar direkt och arbetar sedan i bakgrunden:
+
+- **Inte värd att söka på** (befintlig kund, mäklare, privatperson, spam, oklar, utländsk): inget mejl, bara en loggrad.
+- **Osäkert bolag:** kort mejl "Ny förfrågan – vilket bolag?" med förfrågan och uppmaning att lägga in bolaget i verktyget.
+- **Bolaget hittat:** tvillingsökning (högst 4 tic.io-anrop) och mejl "Förslag på tvillingar: X (N bolag)" med tabell och Excel-bilaga till `MAIL_TO`.
+- Samma inskick hanteras en gång (7 dagar), samma bolag får tvillingar högst en gång per 30 dagar (kräver Redis-cachen).
+
+Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifierad i Resend). Saknas `RESEND_API_KEY` loggas mejlen bara (torrkörning). Lokalt sparar `MAIL_TORR_MAPP=<mapp>` mejlen som HTML-filer.
+
 ## Kundvy och adminvy
 
 - **`/`** — kundens vy. Klartext utan teknik: inga omnämnanden av Jev, tic.io, bolagsdataapi, procent eller SNI-koder. Kundens CSV-export innehåller bara arbetskolumner (bolag, tvilling, likhet, ort, storlek, verksamhet, kontakt, kommentar).
@@ -53,6 +64,11 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `FORETAGSKONTAKT_API_KEY` | Valfri, obekräftad integration för kontaktpersoner. |
 | `SITE_PASSWORD` / `SITE_USERNAME` | Valfritt inloggningsskydd för kundvyn. |
 | `ADMIN_PASSWORD` | Lösenord till teamets adminvy (`/admin`). Saknas den är adminvyn stängd. |
+| `WEBFLOW_WEBHOOK_SECRET` | Hemlig nyckel i Webflow-webhookens URL. Saknas den tas inga webhooks emot. |
+| `RESEND_API_KEY` | Nyckel till Resend för automatiska mejl. |
+| `MAIL_FROM` | Avsändare, t.ex. `Tvillinganalys <tvillingar@upstrategylab.com>` (domänen verifierad i Resend). |
+| `MAIL_TO` | Mottagare av automatiska mejl, kommaseparerade. |
+| `APP_URL` | Valfri. Länken i mejlen (standard https://tvillinganalys.vercel.app). |
 
 Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör appen mot riktiga API:er — **varje körning drar på tic.io-kvoten.**
 
