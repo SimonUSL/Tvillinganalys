@@ -8,6 +8,8 @@ export type { ResultRow } from "@/lib/korning";
 // En veckas formulärförfrågningar tar längre än 60 s. 300 s kräver Fluid Compute
 // (standard för nya Vercel-projekt).
 export const maxDuration = 300;
+// tic.io tar bara emot anrop från Norden/Tyskland - kör alltid i Stockholm.
+export const preferredRegion = "arn1";
 
 // Ett granskat lead som gränssnittet skickar.
 interface GranskatLead {

@@ -5,6 +5,8 @@ import { classifyInquiry, identifyCompany, parseFormExports, skalAttHoppaOver, u
 // (bolagsdataapi). Inga tic.io-anrop - de görs först när användaren har
 // granskat listan och kör tvillingsökningen.
 export const maxDuration = 300;
+// tic.io tar bara emot anrop från Norden/Tyskland - kör alltid i Stockholm.
+export const preferredRegion = "arn1";
 
 export interface Forhandsrad {
   id: number;

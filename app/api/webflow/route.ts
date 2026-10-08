@@ -11,6 +11,8 @@ import { hanteraLead } from "@/lib/automatik";
 // 2. Nyckeln i URL:en: /api/webflow?nyckel=<WEBFLOW_WEBHOOK_SECRET>.
 // Svarar Webflow direkt och arbetar sedan vidare i bakgrunden (waitUntil).
 export const maxDuration = 300;
+// tic.io tar bara emot anrop från Norden/Tyskland - kör alltid i Stockholm.
+export const preferredRegion = "arn1";
 
 // Webflow skickar tidsstämpeln i millisekunder; sekunder godtas också.
 const MAX_ALDER_MS = 5 * 60 * 1000;
