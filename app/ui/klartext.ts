@@ -51,11 +51,17 @@ export function matchningText(kod?: string | null): string | null {
 // "Dalarnas län" -> "Dalarna", "Blekinge" -> "Blekinge"
 const kortLan = (lan?: string | null) => (lan || "").replace(/s?\s+län$/i, "").trim();
 
-export function urvalText(kod?: string | null, lokal?: boolean, lan?: string | null, orter?: string[] | null): string | null {
-  // "i Floda/Lerum och övriga Västra Götaland" när lokala tvillingar hittades närmast.
+export function urvalText(
+  kod?: string | null,
+  lokal?: boolean,
+  lan?: string | null,
+  orter?: string[] | null,
+  baraNara?: boolean
+): string | null {
+  // "i Lerums kommun och övriga Västra Götaland" när lokala tvillingar hittades närmast.
   const iLan =
     lokal && orter?.length
-      ? ` i ${orter.join("/")}${kortLan(lan) ? ` och övriga ${kortLan(lan)}` : ""}`
+      ? ` i ${orter.join(", ")}${kortLan(lan) && !baraNara ? ` och övriga ${kortLan(lan)}` : ""}`
       : lokal && kortLan(lan)
         ? ` i ${kortLan(lan)}`
         : "";

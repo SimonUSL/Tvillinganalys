@@ -3,6 +3,7 @@
 
 import { berikaKontakt } from "./foretagskontakt";
 import { kommunerIText } from "./kommuner";
+import { kommunNamn, naraOrter, postorterIKommun } from "./postorter";
 import {
   Company,
   LeadOptions,
@@ -38,7 +39,8 @@ export interface ResultRow {
   urval?: string | null; // teknisk text (adminvyn)
   // Strukturerat, för klartext i gränssnittet:
   urval_kod?: string | null;
-  urval_orter?: string[]; // lokala tvillingar söktes här först, t.ex. ["Floda", "Lerum"]
+  urval_orter?: string[]; // där de lokala tvillingarna finns, t.ex. ["Lerums kommun"]
+  urval_bara_nara?: boolean; // alla tvillingar finns där (inga från resten av länet)
   tic_tak?: boolean;
   lokal?: boolean;
   sasong_kod?: string | null;
@@ -162,11 +164,13 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
     }
   }
 
-  // Lokala bolag: sök först på bolagets egen ort och kommuner som förfrågan nämner.
+  // Lokala bolag: sök först i bolagets egen kommun och i kommuner som förfrågan
+  // nämner (alla deras postorter), sedan i länet.
+  let naraKommuner: string[] = [];
   if (options.geografi_relevant) {
-    const snygg = (o: string) => o.charAt(0).toUpperCase() + o.slice(1).toLowerCase();
-    const orter = [source.ort, ...kommunerIText(lead.extra?.forfragan_text)].filter(Boolean).map((o) => snygg(o!.trim()));
-    options.orter = [...new Set(orter)];
+    const n = naraOrter(source.ort, kommunerIText(lead.extra?.forfragan_text));
+    options.orter = n.orter;
+    naraKommuner = n.kommuner;
   }
 
   const gemensam = {
@@ -188,7 +192,12 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   } catch (e: any) {
     return [{ ...gemensam, status_kod: "fel", status: `fel vid tvillingsökning: ${e.message || e}` }];
   }
-  const urvalFalt = { urval, urval_kod, urval_orter, tic_tak };
+  // Visas som kommuner ("Lerums kommun"), eller postorten om kommunen inte är känd.
+  const iKommun = (o: string) => naraKommuner.find((k) => postorterIKommun(k).some((x) => x.toUpperCase() === o.toUpperCase()));
+  urval_orter = [...new Set(urval_orter.map((o) => { const k = iKommun(o); return k ? kommunNamn(k) : o; }))];
+  const naraSet = new Set((options.orter || []).map((o) => o.toUpperCase()));
+  const urval_bara_nara = !!urval_orter.length && twins.every((t) => t.ort && naraSet.has(t.ort.trim().toUpperCase()));
+  const urvalFalt = { urval, urval_kod, urval_orter, urval_bara_nara, tic_tak };
   if (!twins.length) return [{ ...gemensam, ...urvalFalt, status_kod: "inga_tvillingar", status: "inga tvillingar hittade" }];
 
   const rows: ResultRow[] = [];

@@ -208,7 +208,7 @@ function tvillingMejl(rows: ResultRow[], granskad = false): string {
     .filter(Boolean)
     .join(" ");
   const tvillingar = rows.filter((x) => x.tvilling_namn);
-  const fakta = [lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan, forsta.urval_orter)]
+  const fakta = [lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan, forsta.urval_orter, forsta.urval_bara_nara)]
     .filter(Boolean)
     .join(" · ");
   const rader = tvillingar

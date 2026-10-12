@@ -1294,7 +1294,7 @@ export async function findTwins(
 const BOLAGSDATA_NAMN_LIMIT = 100;
 // Lokala bolag: högst så många orter söks före länet, och så många namnträffar
 // totalt får Jevs namnsållning.
-const MAX_NARA_ORTER = 3;
+const MAX_NARA_ORTER = 8; // ett sökanrop per ort, sparas 180 dagar
 const BOLAGSDATA_NAMN_MAX = 150;
 const normOrt = (s: string) => s.trim().toUpperCase();
 // Så många namnträffar får detaljanrop (verksamhetsbeskrivning + SNI) och Jev-bedömning.
@@ -1451,7 +1451,7 @@ async function bolagsdataCandidates(
   }
   const urval =
     `bolagsdataapi: namn med "${ord}"` +
-    (orter.length ? `, ${orter.join("/")} först` : "") +
+    (orter.length ? `, först ${orter.join("/")}` : "") +
     (lan ? `, ${bolagsdataLan(lan)}` : "") +
     (params.oms_min ? ", liknande omsättning" : "");
   return { pool, urval, logg };
