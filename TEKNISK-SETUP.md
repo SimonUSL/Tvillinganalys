@@ -15,8 +15,8 @@ Kod: GitHub-repot `SimonUSL/Tvillinganalys`. **Varje push till `main` deployas a
 Varje formulärinskick på webbplatsen skickas av Webflow till `/api/webflow?nyckel=<WEBFLOW_WEBHOOK_SECRET>` (Webflow → Site settings → Apps & integrations → Webhooks → *Form submission*). Appen svarar direkt och arbetar sedan i bakgrunden:
 
 - **Inte värd att söka på** (befintlig kund, mäklare, privatperson, spam, oklar, utländsk): inget mejl, bara en loggrad.
-- **Osäkert bolag, inga tvillingar eller fel:** förfrågan läggs i **granskningskön** (`/granska`, `lib/granskning.ts`, Redis-hashen `granska:poster`) och mejlet "Att granska: ny förfrågan från …" säger varför, med knappen *Granska i Tvillinganalys*. På `/granska` fyller man i eller rättar bolaget och kör tvillingsökningen; resultatet mejlas till `MAIL_TO` precis som de automatiska ("Förslag på tvillingar … – efter manuell granskning", med en markering överst i mejlet; `skickaTvillingMejl`), och leads som får tvillingar tas bort ur kön, och poster kan tas bort för hand. Poster äldre än 60 dagar rensas (de innehåller personuppgifter). Sidhuvudet visar "Granska (N)".
-- **Bolaget hittat:** tvillingsökning (högst 4 tic.io-anrop) och mejl "Förslag på tvillingar: X (N bolag)" med tabell och Excel-bilaga till `MAIL_TO`.
+- **Osäkert bolag, inga tvillingar eller fel:** förfrågan läggs i **granskningskön** (`/granska`, `lib/granskning.ts`, Redis-hashen `granska:poster`) och mejlet "Att granska: ny förfrågan från …" säger varför, med knappen *Granska i Tvillinganalys*. På `/granska` fyller man i eller rättar bolaget och kör tvillingsökningen; resultatet mejlas till mottagarna precis som de automatiska ("Förslag på tvillingar … – efter manuell granskning", med en markering överst i mejlet; `skickaTvillingMejl`), och leads som får tvillingar tas bort ur kön, och poster kan tas bort för hand. Poster äldre än 60 dagar rensas (de innehåller personuppgifter). Sidhuvudet visar "Granska (N)".
+- **Bolaget hittat:** tvillingsökning (högst 4 tic.io-anrop) och mejl "Förslag på tvillingar: X (N bolag)" med tabell och Excel-bilaga till mottagarna.
 - Samma inskick hanteras en gång (7 dagar), samma bolag får tvillingar högst en gång per 30 dagar (kräver Redis-cachen).
 - Mejlet innehåller hela förfrågan (avsändarens namn, e-post, telefon, meddelande) och för varje tvilling kontaktuppgifter ur registren (`lib/kontakt.ts`): beslutsfattare med roll (VD, ordförande, innehavare, delägare, styrelseledamot – från tic.io, aldrig personnummer eller skyddade identiteter), bolagets e-post (egen domän först), telefon och webbplats. Tvillingar från bolagsdataapi får beslutsfattare via ett gemensamt tic.io-anrop (upp till 10 bolag). Företagskontakt (`lib/foretagskontakt.ts`, när `FORETAGSKONTAKT_API_KEY` finns) köper bara det registren saknar: beslutsfattarens personliga e-post + direkttelefon alltid, info@-adressen bara om registren saknade e-post **och** Företagskontakt varken gav personlig e-post eller direkttelefon. Kostnaden per lead loggas (`"steg":"foretagskontakt"`, `kostnad_kr`). Själva API-anropet (`fragaForetagskontakt`) är byggt på antaganden och anpassas när dokumentationen finns.
 
@@ -27,6 +27,8 @@ Varje körning sparas i Redis i **12 månader**: automatiska (med tvillingar), i
 - **`/historik`** (och `/admin/historik`): lista med sök (bolag, org.nr, avsändare), filter på källa och "bara med tvillingar". *Visa* öppnar körningen med tvillingtabellen och CSV-nedladdning.
 - **Redan föreslagna tvillingar märks**, de tas inte bort: varje föreslagen tvilling minns i 90 dagar (`historik:foreslagen:<orgnr>` → datum + vilket bolag den föreslogs till). Föreslås den igen till ett *annat* bolag får raden `tidigare_datum`/`tidigare_kallbolag` och visas som "Föreslogs 3 okt (till SkiStar AB)" i verktyget, mejlet och CSV:n (kolumnen *Föreslogs tidigare*). Datumet pekar på första gången.
 - Utan Redis (lokalt) sparas historiken i minnet.
+
+**Mottagare** styrs i adminvyn under *Inställningar* (`/admin/installningar`, `lib/installningar.ts`, Redis-nyckeln `installningar:mottagare`). Är listan aldrig sparad där används `MAIL_TO`. Listan kan aldrig sparas tom.
 
 Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifierad i Resend). Saknas `RESEND_API_KEY` loggas mejlen bara (torrkörning). Lokalt sparar `MAIL_TORR_MAPP=<mapp>` mejlen som HTML-filer.
 
@@ -79,7 +81,7 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `WEBFLOW_WEBHOOK_SECRET` | Webhookens "secret key" från Webflow (64 tecken). Appen kontrollerar Webflows signatur (`x-webflow-signature`) med den; alternativt godtas samma värde som `?nyckel=` i URL:en. Saknas den tas inga webhooks emot. |
 | `RESEND_API_KEY` | Nyckel till Resend för automatiska mejl. |
 | `MAIL_FROM` | Avsändare, t.ex. `Tvillinganalys <tvillingar@upstrategylab.com>` (domänen verifierad i Resend). |
-| `MAIL_TO` | Mottagare av automatiska mejl, kommaseparerade. |
+| `MAIL_TO` | Grundinställning för mottagarna, kommaseparerade. Gäller bara tills listan sparats under *Inställningar* i adminvyn. |
 | `APP_URL` | Valfri. Länken i mejlen (standard https://tvillinganalys.vercel.app). |
 
 Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör appen mot riktiga API:er — **varje körning drar på tic.io-kvoten.**
@@ -101,7 +103,7 @@ tic.io-anrop per lead: **0 när bolagsdataapi räcker** (typiskt lokala hantverk
 1. **Kallbolaget** (`resolveSourceCompany`): namnsökning hos bolagsdataapi utan bolagsform (SkiStar heter "SkiStar *Aktiebolag*"), Jev väljer rätt träff eller svarar "ingen". Detaljanropet ger verksamhetsbeskrivning, län och SNI. Valfri CSV-kolumn `org_nr` pekar ut bolaget direkt. tic.io:s namnsökning är reserv.
 2. **Geografi och säsong** (`guessLeadOptions`): tomma CSV-celler gissas av Jev från verksamhetsbeskrivningen. Ifyllda celler gäller alltid.
 3. **Tvillingar** (`findTwins`):
-   - Fas 0, bolagsdataapi: Jev väljer ett branschord som konkurrenter brukar ha i bolagsnamnet ("städ", "assistans"), bolagsdataapi söker namn med ordet (+ län om geografin är relevant, + liknande omsättning), Jev sållar på namnen, de 25 bästa får detaljanrop och full Jev-bedömning. Ger det minst 10 starka tvillingar används inte tic.io alls.
+   - Fas 0, bolagsdataapi: Jev väljer ett branschord som konkurrenter brukar ha i bolagsnamnet ("städ", "assistans"), bolagsdataapi söker namn med ordet (+ liknande omsättning). Är bolaget lokalt söks först bolagets egen postort och kommuner som förfrågan nämner (`lib/kommuner.ts`, alla 290 kommuner, t.ex. "Lerums kommun" → Lerum; högst 3 orter), sedan hela länet. Tvillingar på de närmaste orterna går först i listan, resten fylls på från länet. Obs: bolagsdataapi filtrerar på postort, inte kommun ("Lerum" tar inte med Floda eller Gråbo). Jev sållar på namnen, de 25 bästa får detaljanrop och full Jev-bedömning. Ger det minst 10 starka tvillingar används inte tic.io alls.
    - Annars tic.io, steg A: alla bolag med samma huvud-SNI, störst först. Antalet avgör läget: **≤ 300 = nischbransch** (de största i branschen tas, storlek väger lätt), **fler = trång bransch** (urval på storlek ⅓×–3×, annars "närmast underifrån").
    - Jev bedömer varje kandidat: hur lik verksamheten är, holding/vilande, samma koncern som kallbolaget, ev. säsong. Koden väger ihop till en poäng.
    - Ger SNI-sökningen färre än 10 starka tvillingar körs en nyckelordssökning på verksamhetsbeskrivningen (Jev väljer ordet) för att fånga bolag med annan SNI-kod.

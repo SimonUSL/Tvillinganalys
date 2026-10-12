@@ -93,7 +93,7 @@ export function LeadKort({ lead, rows, vantar, aktiv, admin }: { lead: Rad; rows
             </div>
           ) : (
             <div className="chips">
-              {[lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan)]
+              {[lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan, forsta.urval_orter)]
                 .filter(Boolean)
                 .map((t, i) => (
                   <span key={i} className={`badge${i === 2 ? " badge-info" : ""}`}>

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 const LOGO_SRC =
   "https://cdn.prod.website-files.com/5dd4488fdda3ce628d8173ce/5ddfe48c64e4a62b7bd48be9_optimal_kommunikation_logo.svg";
 
-export type Vy = "verktyg" | "granska" | "historik";
+export type Vy = "verktyg" | "granska" | "historik" | "installningar";
 
 // Sidhuvudet med länkarna mellan verktyget, granskningskön och historiken.
 export default function Sidhuvud({ admin, vy }: { admin: boolean; vy: Vy }) {
@@ -23,6 +23,7 @@ export default function Sidhuvud({ admin, vy }: { admin: boolean; vy: Vy }) {
     { vy: "verktyg", href: bas || "/", text: "Verktyget" },
     { vy: "granska", href: `${bas}/granska`, text: `Granska${koAntal ? ` (${koAntal})` : ""}` },
     { vy: "historik", href: `${bas}/historik`, text: "Historik" },
+    ...(admin ? [{ vy: "installningar" as Vy, href: "/admin/installningar", text: "Inställningar" }] : []),
   ];
 
   async function loggaUt() {

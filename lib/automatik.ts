@@ -112,7 +112,7 @@ export async function skickaTvillingMejl(rows: ResultRow[], granskad = false): P
   if (!forsta || !tvillingar.length) return { skickat: false, fel: "inga tvillingar" };
   const namn = forsta.kall_namn || forsta.lead_foretagsnamn;
   const svar = await skickaMejl({
-    till: mottagare(),
+    till: await mottagare(),
     amne: `Förslag på tvillingar: ${namn} (${tvillingar.length} bolag)${granskad ? " – efter manuell granskning" : ""}`,
     html: tvillingMejl(rows, granskad),
     bilagor: [{ filnamn: `tvillingar-${slug(namn)}.csv`, innehall: "\uFEFF" + byggCsv(rows) }],
@@ -148,7 +148,7 @@ async function tillGranskning(
   await laggIKo(post);
   const vem = bolag?.namn || f.namn || f.doman || f.epost || "okänd avsändare";
   await skickaMejl({
-    till: mottagare(),
+    till: await mottagare(),
     amne: `Att granska: ny förfrågan från ${vem}`,
     html: granskaMejl(f, k ? forfraganEtikett(k.typ, k.avsandare) : "Ny förfrågan", orsak, forslag?.namn, bolag?.namn),
   });
@@ -208,7 +208,7 @@ function tvillingMejl(rows: ResultRow[], granskad = false): string {
     .filter(Boolean)
     .join(" ");
   const tvillingar = rows.filter((x) => x.tvilling_namn);
-  const fakta = [lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan)]
+  const fakta = [lokalText(forsta.lokal), sasongText(forsta.sasong_kod), urvalText(forsta.urval_kod, forsta.lokal, forsta.kall_lan, forsta.urval_orter)]
     .filter(Boolean)
     .join(" · ");
   const rader = tvillingar

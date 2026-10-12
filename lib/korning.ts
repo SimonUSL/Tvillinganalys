@@ -2,6 +2,7 @@
 // sök tvillingar. Delas av verktyget (/api/run) och Webflow-webhooken.
 
 import { berikaKontakt } from "./foretagskontakt";
+import { kommunerIText } from "./kommuner";
 import {
   Company,
   LeadOptions,
@@ -37,6 +38,7 @@ export interface ResultRow {
   urval?: string | null; // teknisk text (adminvyn)
   // Strukturerat, för klartext i gränssnittet:
   urval_kod?: string | null;
+  urval_orter?: string[]; // lokala tvillingar söktes här först, t.ex. ["Floda", "Lerum"]
   tic_tak?: boolean;
   lokal?: boolean;
   sasong_kod?: string | null;
@@ -160,6 +162,13 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
     }
   }
 
+  // Lokala bolag: sök först på bolagets egen ort och kommuner som förfrågan nämner.
+  if (options.geografi_relevant) {
+    const snygg = (o: string) => o.charAt(0).toUpperCase() + o.slice(1).toLowerCase();
+    const orter = [source.ort, ...kommunerIText(lead.extra?.forfragan_text)].filter(Boolean).map((o) => snygg(o!.trim()));
+    options.orter = [...new Set(orter)];
+  }
+
   const gemensam = {
     ...gemensamGrund,
     geografi_relevant: geografiInfo,
@@ -172,13 +181,14 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   let twins: Twin[] = [];
   let urval = "";
   let urval_kod = "";
+  let urval_orter: string[] = [];
   let tic_tak = false;
   try {
-    ({ twins, urval, urval_kod, tic_tak } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
+    ({ twins, urval, urval_kod, urval_orter, tic_tak } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
   } catch (e: any) {
     return [{ ...gemensam, status_kod: "fel", status: `fel vid tvillingsökning: ${e.message || e}` }];
   }
-  const urvalFalt = { urval, urval_kod, tic_tak };
+  const urvalFalt = { urval, urval_kod, urval_orter, tic_tak };
   if (!twins.length) return [{ ...gemensam, ...urvalFalt, status_kod: "inga_tvillingar", status: "inga tvillingar hittade" }];
 
   const rows: ResultRow[] = [];

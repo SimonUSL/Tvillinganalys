@@ -2,6 +2,8 @@
 // adress på en domän som verifierats i Resend (MAIL_FROM). Saknas
 // RESEND_API_KEY skickas inget; mejlet loggas i stället (torrkörning).
 
+import { hamtaMottagare } from "./installningar";
+
 export interface Mejl {
   till: string[];
   amne: string;
@@ -9,11 +11,8 @@ export interface Mejl {
   bilagor?: { filnamn: string; innehall: string }[]; // innehåll som text
 }
 
-export const mottagare = () =>
-  (process.env.MAIL_TO || "")
-    .split(/[,;\s]+/)
-    .map((s) => s.trim())
-    .filter((s) => s.includes("@"));
+// Mottagarna styrs i adminvyn (lib/installningar.ts), annars MAIL_TO.
+export const mottagare = async () => (await hamtaMottagare()).lista;
 
 export async function skickaMejl(m: Mejl): Promise<{ skickat: boolean; fel?: string }> {
   const nyckel = process.env.RESEND_API_KEY;

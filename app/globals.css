@@ -219,6 +219,7 @@ input[type="text"],
 input[type="date"],
 input[type="number"],
 input[type="search"],
+input[type="email"],
 input:not([type]),
 select,
 textarea {

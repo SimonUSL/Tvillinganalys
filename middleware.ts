@@ -23,6 +23,11 @@ export async function middleware(req: NextRequest) {
     if (isAdmin) return NextResponse.next();
     return NextResponse.redirect(new URL("/admin/login", req.url));
   }
+  // Adminens API (t.ex. mottagarlistan) kräver alltid admininloggning.
+  if (pathname.startsWith("/api/admin/")) {
+    if (isAdmin) return NextResponse.next();
+    return NextResponse.json({ error: "Kräver admininloggning." }, { status: 401 });
+  }
 
   const password = process.env.SITE_PASSWORD;
   if (!password || isAdmin) return NextResponse.next();

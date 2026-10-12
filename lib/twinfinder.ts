@@ -13,6 +13,9 @@ export interface LeadOptions {
   geografi_relevant: boolean;
   storlek_strikt: boolean;
   sasongseffekt: string;
+  // Lokala bolag: orter att söka först (bolagets egen ort och kommuner som
+  // förfrågan nämner), innan sökningen breddas till länet.
+  orter?: string[];
 }
 
 export interface Company {
@@ -969,6 +972,7 @@ export type UrvalKod = "namn" | "nisch" | "storlek" | "strikt" | "nyckelord" | "
 
 export interface TwinResult {
   urval_kod: UrvalKod;
+  urval_orter: string[]; // orter där lokala tvillingar hittades (visas först)
   tic_tak: boolean; // taket för tic.io-anrop nåddes
   twins: Twin[];
   // Hur kandidaterna valdes, t.ex. "nischbransch (139 bolag med SNI 93111): storlek ignorerad".
@@ -988,6 +992,7 @@ export async function findTwins(
   const { profile: sourceProfile, sni2007 } = ticSource;
   // Jämför län med samma källa (tic.io) på båda sidor när det går.
   const sourceLan = ticSource.county ?? source.lan;
+  const naraOrter = new Set((options.orter || []).map(normOrt));
   const filterBy = (filters: string[]) => (filters.length ? { filter_by: filters.join(" && ") } : {});
   const logg: Record<string, any> = { steg: "tvillingsökning", kallbolag: source.name };
   const anropFore = tic.anrop;
@@ -1269,19 +1274,29 @@ export async function findTwins(
   // Poäng inom samma 0,05-steg räknas som lika (skillnaderna där är brus i
   // Jevs sannolikheter, vanligt i nischbranscher där alla är direkta
   // konkurrenter) - då går den närmast kallbolaget i storlek först.
+  // Lokala bolag: tvillingar på de närmaste orterna först, sedan resten av länet.
   const steg = (t: Twin) => Math.round((t.poang ?? 0) * 20);
-  twins.sort((a, b) => steg(b) - steg(a) || (narhet.get(b) ?? 0) - (narhet.get(a) ?? 0));
-  if (!typesafeKey) return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
+  const nara = (t: Twin) => (options.geografi_relevant && t.ort && naraOrter.has(normOrt(t.ort)) ? 1 : 0);
+  twins.sort((a, b) => nara(b) - nara(a) || steg(b) - steg(a) || (narhet.get(b) ?? 0) - (narhet.get(a) ?? 0));
+  const antalNara = twins.slice(0, MAX_TWINS_PER_LEAD).filter(nara).length;
+  logg.nara_orter = [...naraOrter];
+  const urvalOrter = antalNara ? (options.orter || []).filter((o) => twins.some((t) => nara(t) && normOrt(t.ort!) === normOrt(o))) : [];
+  if (!typesafeKey) return { urval, urval_kod: urvalKod, urval_orter: urvalOrter, tic_tak: ticTak, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
   const slutliga = kvar.slice(0, MAX_TWINS_PER_LEAD);
   await fyllKontakter(slutliga, tic);
-  return { urval, urval_kod: urvalKod, tic_tak: ticTak, twins: slutliga };
+  return { urval, urval_kod: urvalKod, urval_orter: urvalOrter, tic_tak: ticTak, twins: slutliga };
 }
 
 // --- Fas 0: kandidater från bolagsdataapi --------------------------------
 
 const BOLAGSDATA_NAMN_LIMIT = 100;
+// Lokala bolag: högst så många orter söks före länet, och så många namnträffar
+// totalt får Jevs namnsållning.
+const MAX_NARA_ORTER = 3;
+const BOLAGSDATA_NAMN_MAX = 150;
+const normOrt = (s: string) => s.trim().toUpperCase();
 // Så många namnträffar får detaljanrop (verksamhetsbeskrivning + SNI) och Jev-bedömning.
 const BOLAGSDATA_DETALJ_MAX = 25;
 const MIN_NAMN_LIKHET = 0.4;
@@ -1361,11 +1376,27 @@ async function bolagsdataCandidates(
     params.oms_min = String(Math.floor(source.net_revenue / f));
     params.oms_max = String(Math.ceil(source.net_revenue * f));
   }
-  const data = await bolagsdataGet(`/search?${new URLSearchParams(params)}`, bolagsdataKey);
-  const hits: any[] = (data.hits || []).filter((h: any) => {
-    const org = normOrgNr(h.org_nr);
-    return org.length === 10 && !seen.has(org) && !excludeOrgNrs.has(org);
-  });
+  // Lokala bolag: först de närmaste orterna (postort), sedan hela länet.
+  // bolagsdataapi:s ort-filter är postorten, inte kommunen.
+  const orter = options.geografi_relevant ? (options.orter || []).slice(0, MAX_NARA_ORTER) : [];
+  const sokningar = [
+    ...orter.map((ort) => ({ ...params, ort: ort.toUpperCase() })),
+    params,
+  ];
+  const svarLista = await Promise.all(sokningar.map((p) => bolagsdataGet(`/search?${new URLSearchParams(p)}`, bolagsdataKey).catch(() => ({ hits: [] }))));
+  const naraSet = new Set(orter.map(normOrt));
+  const sedda = new Set<string>();
+  const hits: any[] = svarLista
+    .flatMap((d: any) => d.hits || [])
+    .filter((h: any) => {
+      const org = normOrgNr(h.org_nr);
+      if (org.length !== 10 || seen.has(org) || excludeOrgNrs.has(org) || sedda.has(org)) return false;
+      sedda.add(org);
+      return true;
+    })
+    .slice(0, BOLAGSDATA_NAMN_MAX);
+  const arNara = (h: any) => (h.postal_town && naraSet.has(normOrt(h.postal_town)) ? 1 : 0);
+  logg.nara_traffar = hits.filter(arNara).length;
   logg.namntraffar = hits.length;
   if (!hits.length) return { pool: [], urval: "", logg };
 
@@ -1394,7 +1425,7 @@ async function bolagsdataCandidates(
   const valda = hits
     .map((h, i) => ({ h, p: svar[`n_${i}`]?.noul ?? 0 }))
     .filter((x) => x.p >= MIN_NAMN_LIKHET)
-    .sort((a, b) => b.p - a.p)
+    .sort((a, b) => arNara(b.h) - arNara(a.h) || b.p - a.p)
     .slice(0, BOLAGSDATA_DETALJ_MAX);
   logg.detaljanrop = valda.length;
 
@@ -1420,6 +1451,7 @@ async function bolagsdataCandidates(
   }
   const urval =
     `bolagsdataapi: namn med "${ord}"` +
+    (orter.length ? `, ${orter.join("/")} först` : "") +
     (lan ? `, ${bolagsdataLan(lan)}` : "") +
     (params.oms_min ? ", liknande omsättning" : "");
   return { pool, urval, logg };
