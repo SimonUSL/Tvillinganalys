@@ -4,7 +4,7 @@
 
 import { cachePa, redis } from "./cache";
 
-export type GranskaOrsak = "osaker" | "ingen" | "inget_namn" | "inga_tvillingar" | "fel";
+export type GranskaOrsak = "osaker" | "ingen" | "inget_namn" | "inga_tvillingar" | "kvot" | "fel";
 
 export interface GranskaPost {
   id: string;

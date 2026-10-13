@@ -1,5 +1,5 @@
 import { cacheGet, cacheNyckel, cacheSet } from "./cache";
-import { kvotFranSvar, sparaKvot } from "./kvot";
+import { kvarIMinnet, kvotFranSvar, sparaKvot } from "./kvot";
 import { Kontakt, kontaktFranBolagsdata, kontaktFranTic, slaIhop } from "./kontakt";
 
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
@@ -372,11 +372,24 @@ async function resolveViaTic(companyName: string, tic: Tic, typesafeKey?: string
   return { company, matchning, ticSource: ticSourceFromDoc(docs[index], company) };
 }
 
+// Dygnskvoten hos bolagsdataapi är slut. Stoppar sökningen i stället för att
+// falla tillbaka på tic.io (som har mycket mindre kvot).
+export class BolagsdataSlut extends Error {
+  constructor() {
+    super("dagens anrop till bolagsdataapi är slut");
+  }
+}
+export const arKvotSlut = (e: unknown) => e instanceof BolagsdataSlut;
+
 async function bolagsdataGet(path: string, bolagsdataKey: string): Promise<any> {
   const nyckel = cacheNyckel("bd", path); // nyckeln är sökvägen, aldrig API-nyckeln
   const sparad = await cacheGet<any>(nyckel);
   if (sparad) return sparad;
+  if (kvarIMinnet("bolagsdata") === 0) throw new BolagsdataSlut();
   const resp = await fetch(`${BOLAGSDATA_BASE}${path}`, { headers: { "x-api-key": bolagsdataKey } });
+  const kvot = kvotFranSvar(resp.headers, "bolagsdata");
+  if (kvot) await sparaKvot(kvot, "bolagsdata");
+  if (resp.status === 429) throw new BolagsdataSlut();
   // Ett fel från API:et (fel nyckel, slut på kvot osv.) ska synas i statusen,
   // inte se ut som att bolaget inte finns. Fel cachas inte.
   if (!resp.ok) throw new Error(`bolagsdataapi ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -409,7 +422,10 @@ export async function resolveViaBolagsdata(
   const kandidater = urval.map(candidateSummary) as Record<string, any>[];
   const detaljer: (any | null)[] = kontext
     ? await mapLimit(urval, KONTEXT_DETALJER, (h) =>
-        bolagsdataGet(`/company/${normOrgNr(h.org_nr)}`, bolagsdataKey).catch(() => null)
+        bolagsdataGet(`/company/${normOrgNr(h.org_nr)}`, bolagsdataKey).catch((e) => {
+          if (arKvotSlut(e)) throw e;
+          return null;
+        })
       )
     : [];
   detaljer.forEach((d, i) => {
@@ -448,6 +464,7 @@ export async function bolagsdataDetails(
   try {
     data = forladdad ?? (await bolagsdataGet(`/company/${orgNr}`, bolagsdataKey));
   } catch (e: any) {
+    if (arKvotSlut(e)) throw e;
     if (!hit) return { company: null, matchning: `bolagsdataapi hittade inte org.nr ${orgNr}` };
     data = {};
   }
@@ -1071,11 +1088,19 @@ export async function findTwins(
       logg.bolagsdata = fas0.logg;
       for (const { company, profile, koncern } of fas0.pool) koncernInfo.set(company, koncern);
       await judgePool(fas0.pool.map(({ company, profile }) => ({ company, profile })));
+      // Räckte inte de första kandidaterna: hämta resten innan tic.io används.
+      if (starka < MIN_STARKA_TVILLINGAR && fas0.hamtaFler) {
+        const fler = await fas0.hamtaFler();
+        for (const { company, koncern } of fler) koncernInfo.set(company, koncern);
+        fas0.pool.push(...fler);
+        await judgePool(fler.map(({ company, profile }) => ({ company, profile })));
+      }
       if (fas0.pool.length) {
         urvalDelar.push(fas0.urval);
         urvalKod = "namn";
       }
     } catch (e: any) {
+      if (arKvotSlut(e)) throw e; // inte vidare till tic.io
       logg.bolagsdata_fel = String(e.message || e);
     }
   }
@@ -1304,6 +1329,9 @@ const BOLAGSDATA_NAMN_MAX = 150;
 const normOrt = (s: string) => s.trim().toUpperCase();
 // Så många namnträffar får detaljanrop (verksamhetsbeskrivning + SNI) och Jev-bedömning.
 const BOLAGSDATA_DETALJ_MAX = 25;
+// Lokala bolag: så många detaljanrop först, resten bara om det inte räckte.
+const BOLAGSDATA_DETALJ_LOKAL = 15;
+type KandidatPool = { company: Twin; profile: TicProfile; koncern: KoncernInfo }[];
 const MIN_NAMN_LIKHET = 0.4;
 
 // Sammansatta ord delas vid vanliga efterled, så att "städverksamhet" ger
@@ -1367,7 +1395,12 @@ async function bolagsdataCandidates(
   typesafeKey: string,
   seen: Set<string>,
   excludeOrgNrs: Set<string>
-): Promise<{ pool: { company: Twin; profile: TicProfile; koncern: KoncernInfo }[]; urval: string; logg: Record<string, any> }> {
+): Promise<{
+  pool: KandidatPool;
+  urval: string;
+  logg: Record<string, any>;
+  hamtaFler?: () => Promise<KandidatPool>; // fler kandidater (lokala bolag), bara om de första inte räckte
+}> {
   const logg: Record<string, any> = {};
   const ord = await pickNameKeyword(ticSource.profile, typesafeKey);
   logg.namnord = ord;
@@ -1388,7 +1421,10 @@ async function bolagsdataCandidates(
     ...orter.map((ort) => ({ ...params, ort: ort.toUpperCase() })),
     params,
   ];
-  const svarLista = await Promise.all(sokningar.map((p) => bolagsdataGet(`/search?${new URLSearchParams(p)}`, bolagsdataKey).catch(() => ({ hits: [] }))));
+  const svarLista = await Promise.all(sokningar.map((p) => bolagsdataGet(`/search?${new URLSearchParams(p)}`, bolagsdataKey).catch((e) => {
+        if (arKvotSlut(e)) throw e;
+        return { hits: [] };
+      })));
   const naraSet = new Set(orter.map(normOrt));
   const sedda = new Set<string>();
   const hits: any[] = svarLista
@@ -1432,12 +1468,23 @@ async function bolagsdataCandidates(
     .filter((x) => x.p >= MIN_NAMN_LIKHET)
     .sort((a, b) => arNara(b.h) - arNara(a.h) || b.p - a.p)
     .slice(0, BOLAGSDATA_DETALJ_MAX);
-  logg.detaljanrop = valda.length;
+  // Lokala bolag: först de 15 bästa, resten (upp till 25) bara om det behövs
+  // (se hamtaFler). Testat 2026-10-13: 15 gav lika många direkta konkurrenter.
+  const forsta = options.geografi_relevant ? valda.slice(0, BOLAGSDATA_DETALJ_LOKAL) : valda;
+  const reserv = valda.slice(forsta.length);
+  logg.detaljanrop = forsta.length;
+  const pool = await hamtaDetaljer(forsta);
+  const hamtaFler = async () => {
+    logg.detaljanrop += reserv.length;
+    return reserv.length ? hamtaDetaljer(reserv.splice(0)) : [];
+  };
 
-  const detaljer = await mapLimit(valda, 5, async ({ h }) => {
+  async function hamtaDetaljer(urval: { h: any }[]) {
+  const detaljer = await mapLimit(urval, 5, async ({ h }) => {
     try {
       return await bolagsdataDetails(normOrgNr(h.org_nr), bolagsdataKey, h, "");
-    } catch {
+    } catch (e) {
+      if (arKvotSlut(e)) throw e;
       return null;
     }
   });
@@ -1454,12 +1501,14 @@ async function bolagsdataCandidates(
       koncern: { name: company.name, address: company.ort ?? null, website: d.ticSource.profile.website, owned_through: [] },
     });
   }
+  return pool;
+  }
   const urval =
     `bolagsdataapi: namn med "${ord}"` +
     (orter.length ? `, först ${orter.join("/")}` : "") +
     (lan ? `, ${bolagsdataLan(lan)}` : "") +
     (params.oms_min ? ", liknande omsättning" : "");
-  return { pool, urval, logg };
+  return { pool, urval, logg, hamtaFler };
 }
 
 // Tvillingar från bolagsdataapi saknar beslutsfattare: hämta alla på en gång

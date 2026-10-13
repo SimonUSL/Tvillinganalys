@@ -27,10 +27,14 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
   const kalla: Kalla = ko ? "export" : "csv";
   const [lista, setLista] = useState<Lista | null>(null);
   const [kvot, setKvot] = useState<Kvot | null>(null);
+  const [bdKvot, setBdKvot] = useState<Kvot | null>(null);
   const hamtaKvot = () =>
     fetch("/api/kvot")
       .then((r) => r.json())
-      .then((d) => setKvot(d.kvot || null))
+      .then((d) => {
+        setKvot(d.kvot || null);
+        setBdKvot(d.bolagsdata || null);
+      })
       .catch(() => {});
   useEffect(() => {
     hamtaKvot();
@@ -264,6 +268,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
             setMaxTic={setMaxTic}
             standardTak={standardTak}
             kvot={kvot}
+            bdKvot={bdKvot}
             onTillbaka={() => (ko ? (window.location.href = admin ? "/admin" : "/") : setSteg("underlag"))}
             onTaBort={ko ? taBortUrKo : undefined}
             onKor={kor}

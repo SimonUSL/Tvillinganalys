@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { hamtaKvot } from "@/lib/kvot";
 
-// Sökningar kvar i det betalda registret (tic.io), senast kända värde.
+// Anrop kvar hos tic.io (betalt, per period) och bolagsdataapi (fritt, per dygn), senast kända värden.
 export async function GET() {
-  return NextResponse.json({ kvot: await hamtaKvot() }, { headers: { "Cache-Control": "no-store" } });
+  const [tic, bolagsdata] = await Promise.all([hamtaKvot("tic"), hamtaKvot("bolagsdata")]);
+  return NextResponse.json({ kvot: tic, bolagsdata }, { headers: { "Cache-Control": "no-store" } });
 }

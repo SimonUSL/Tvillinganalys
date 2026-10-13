@@ -93,6 +93,8 @@ export function statusText(kod?: string | null): string {
       return "Bolaget saknar uppgift om bransch, så det går inte att hitta liknande bolag.";
     case "inga_tvillingar":
       return "Hittade inga tillräckligt lika bolag.";
+    case "kvot_slut":
+      return "Dagens sökningar i bolagsregistret är slut. Kör det här bolaget igen i morgon.";
     case "dublett":
       return "Samma bolag fanns redan tidigare i listan.";
     case "fel":
@@ -108,6 +110,7 @@ export const GRANSKA_ORSAK: Record<string, string> = {
   ingen: "Vi hittade inget bolag i registret som matchar avsändaren.",
   inget_namn: "Förfrågan innehåller inget bolagsnamn och skickades från en privat e-postadress.",
   inga_tvillingar: "Vi hittade inga tillräckligt lika bolag.",
+  kvot: "Dagens sökningar i bolagsregistret tog slut innan förfrågan hann sökas. Kör den härifrån i morgon.",
   fel: "Något gick fel när förfrågan behandlades.",
 };
 

@@ -12,6 +12,7 @@ import {
   TicSource,
   Twin,
   arJa,
+  arKvotSlut,
   fetchTicSource,
   findTwins,
   guessLeadOptions,
@@ -44,7 +45,7 @@ export interface ResultRow {
   tic_tak?: boolean;
   lokal?: boolean;
   sasong_kod?: string | null;
-  status_kod?: "tvilling" | "ej_hittat" | "ingen_sni" | "inga_tvillingar" | "dublett" | "fel";
+  status_kod?: "tvilling" | "ej_hittat" | "ingen_sni" | "inga_tvillingar" | "dublett" | "kvot_slut" | "fel";
   geografi_relevant?: string;
   storlek_strikt?: string;
   sasongseffekt?: string;
@@ -98,6 +99,13 @@ export interface Ctx {
   knownCustomerOrgNrs: Set<string>;
 }
 
+// Dagens anrop till bolagsdataapi är slut: bolaget söks inte (och inte heller hos tic.io).
+export const kvotSlutRad = (bas: Partial<ResultRow> & { lead_foretagsnamn: string }): ResultRow => ({
+  ...bas,
+  status_kod: "kvot_slut",
+  status: "inte sökt: dagens anrop till bolagsdataapi är slut, kör igen i morgon",
+});
+
 export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> {
   const { tic, bolagsdataKey, typesafeKey, foretagskontaktKey, knownCustomerOrgNrs } = ctx;
   const bas = { ...lead.extra, lead_foretagsnamn: lead.namn };
@@ -106,6 +114,7 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   try {
     res = lead.resolved ?? (await resolveSourceCompany(lead.namn, tic, bolagsdataKey, typesafeKey, lead.orgNr || undefined));
   } catch (e: any) {
+    if (arKvotSlut(e)) return [kvotSlutRad(bas)];
     return [{ ...bas, status_kod: "fel", status: `fel vid bolagssökning: ${e.message || e}` }];
   }
   const source: Company | null = res.company;
@@ -193,6 +202,7 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   try {
     ({ twins, urval, urval_kod, urval_orter, tic_tak } = await findTwins(source, ticSource, options, tic, knownCustomerOrgNrs, typesafeKey, bolagsdataKey));
   } catch (e: any) {
+    if (arKvotSlut(e)) return [kvotSlutRad(gemensam)];
     return [{ ...gemensam, status_kod: "fel", status: `fel vid tvillingsökning: ${e.message || e}` }];
   }
   // Visas som kommuner ("Lerums kommun"), eller postorten om kommunen inte är känd.

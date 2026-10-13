@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { namnUtanBolagsform, ticKlient } from "@/lib/twinfinder";
 import { parseCsv } from "@/lib/csv";
-import { Ctx, ResultRow, processLead } from "@/lib/korning";
+import { Ctx, ResultRow, kvotSlutRad, processLead } from "@/lib/korning";
+import { BD_PER_BOLAG, BD_RESERV, kvarNu } from "@/lib/kvot";
 import { KorningsKalla, markeraOchKomIhag, sparaKorning } from "@/lib/historik";
 import { skickaTvillingMejl } from "@/lib/automatik";
 
@@ -84,7 +85,12 @@ export async function POST(req: NextRequest) {
         let rader: ResultRow[];
         // Ett bolag med flera förfrågningar tvillingsöks en gång.
         const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
-        if (sedda.has(nyckel)) {
+        // Spärr: en manuell körning stannar innan den tar de anrop hos bolagsdataapi
+        // som sparas åt förfrågningarna från webbplatsen (BD_RESERV).
+        const bdKvar = sedda.has(nyckel) ? null : await kvarNu("bolagsdata");
+        if (bdKvar !== null && bdKvar < BD_RESERV + BD_PER_BOLAG) {
+          rader = [kvotSlutRad({ ...lead.extra, lead_foretagsnamn: namn || orgNr })];
+        } else if (sedda.has(nyckel)) {
           rader = [
             { ...lead.extra, lead_foretagsnamn: namn || orgNr, status_kod: "dublett", status: "dublett: samma bolag finns tidigare i listan" },
           ];

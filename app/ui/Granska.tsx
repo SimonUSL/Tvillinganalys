@@ -14,7 +14,8 @@ interface Props {
   maxTic: string;
   setMaxTic: (s: string) => void;
   standardTak: number;
-  kvot: Kvot | null; // sökningar kvar i det betalda registret
+  kvot: Kvot | null; // sökningar kvar i det betalda registret (tic.io)
+  bdKvot: Kvot | null; // anrop kvar i dag i det fria registret (bolagsdataapi)
   onTillbaka: () => void;
   onKor: () => void;
   onTaBort?: (r: Rad) => void; // granskningskön: ta bort posten
@@ -220,7 +221,7 @@ export default function Granska(p: Props) {
         );
       })}
 
-      <KvotRad admin={p.admin} tak={p.maxTic.trim() !== "" ? Number(p.maxTic) : p.standardTak} kvot={p.kvot} antal={valda.length} />
+      <KvotRad admin={p.admin} tak={p.maxTic.trim() !== "" ? Number(p.maxTic) : p.standardTak} kvot={p.kvot} bdKvot={p.bdKvot} antal={valda.length} />
 
       <div className="action-bar">
         <button type="button" className="btn" onClick={p.onTillbaka}>
@@ -254,14 +255,23 @@ export default function Granska(p: Props) {
 // Hur många sökningar i det betalda registret körningen kan använda, mot hur många som finns kvar.
 export const kvotGaller = (k: Kvot | null) => !!k && (!k.aterstalls || new Date(k.aterstalls).getTime() > Date.now());
 
-function KvotRad({ admin, tak, kvot, antal }: { admin: boolean; tak: number; kvot: Kvot | null; antal: number }) {
+// Måste stämma med BD_PER_BOLAG och BD_RESERV i lib/kvot.ts.
+const BD_PER_BOLAG = 35;
+const BD_RESERV = 60;
+
+function KvotRad({ admin, tak, kvot, bdKvot, antal }: { admin: boolean; tak: number; kvot: Kvot | null; bdKvot: Kvot | null; antal: number }) {
   if (!antal) return null;
+  // Fria registret: efter midnatt är dygnskvoten full igen.
+  const bdKvar = bdKvot ? (kvotGaller(bdKvot) ? bdKvot.kvar : bdKvot.grans ?? null) : null;
+  const bdBehov = antal * BD_PER_BOLAG;
+  const bdRacker = bdKvar === null ? antal : Math.max(0, Math.floor((bdKvar - BD_RESERV) / BD_PER_BOLAG));
+  const fritt = admin ? "bolagsdataapi" : "det fria registret";
   const register = admin ? "tic.io" : "det betalda registret";
   const kand = kvotGaller(kvot) ? kvot! : null;
   const tid = (iso: string) => `${kortDatum(iso)} ${new Date(iso).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
   const forManga = !!kand && tak > kand.kvar;
   return (
-    <div className={`note${forManga ? " warn" : ""}`} style={{ marginTop: 16 }} role="status">
+    <div className={`note${forManga || bdRacker < antal ? " warn" : ""}`} style={{ marginTop: 16 }} role="status">
       <p style={{ margin: 0 }}>
         Listan använder <strong>högst {tak} sökningar</strong> i {register}
         {kand ? (
@@ -280,8 +290,25 @@ function KvotRad({ admin, tak, kvot, antal }: { admin: boolean; tak: number; kvo
           Det är fler än som finns kvar. Körningen stannar vid {kand!.kvar}; bolagen efter det får tvillingar bara från det fria registret, vilket ofta räcker för lokala bolag.
         </p>
       )}
+      <p style={{ margin: "10px 0 0" }}>
+        Den använder också upp till cirka <strong>{bdBehov} anrop</strong> i {fritt}
+        {bdKvar !== null ? (
+          <>
+            {" "}av <strong>{bdKvar} kvar i dag</strong> (fylls på vid midnatt)
+          </>
+        ) : null}
+        . {BD_RESERV} anrop om dagen sparas åt förfrågningarna från webbplatsen.
+      </p>
+      {bdRacker < antal && (
+        <p style={{ margin: "6px 0 0" }}>
+          <strong>
+            Det räcker till cirka {bdRacker} av {antal} bolag i dag.
+          </strong>{" "}
+          Resten markeras "Kör igen i morgon" och söks inte, varken här eller i det betalda registret. Bolag som redan sökts tidigare kostar inget och går oftast igenom ändå.
+        </p>
+      )}
       <p className="hint" style={{ margin: "6px 0 0" }}>
-        {kand ? `Kvar uppdaterades ${tid(kand.uppdaterad)}.` : "Hur många som är kvar visas efter nästa sökning."}
+        {kand ? `Kvar uppdaterades ${tid(kand.uppdaterad)}.` : "Hur många som är kvar i det betalda registret visas efter nästa sökning där."}
       </p>
     </div>
   );

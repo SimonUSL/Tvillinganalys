@@ -17,7 +17,7 @@ import { mottagare, skickaMejl } from "./mail";
 import { GranskaOrsak, GranskaPost, laggIKo } from "./granskning";
 import { markeraOchKomIhag, sparaKorning } from "./historik";
 import type { Klassning } from "./inkorg";
-import { ticKlient } from "./twinfinder";
+import { arKvotSlut, ticKlient } from "./twinfinder";
 import { GRANSKA_ORSAK, forfraganEtikett, likhetText, lokalText, sasongText, tidigareText, urvalText } from "@/app/ui/klartext";
 
 // Tak för tic.io-anrop per automatiskt lead (nyckeln har 200/mån).
@@ -87,7 +87,8 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
     );
     const tvillingar = rows.filter((x) => x.tvilling_namn);
     if (!tvillingar.length) {
-      await tillGranskning(f, k, inskickId, "inga_tvillingar", null, { namn: r.company.name, org_nr: r.company.org_nr });
+      const orsak: GranskaOrsak = rows[0]?.status_kod === "kvot_slut" ? "kvot" : "inga_tvillingar";
+      await tillGranskning(f, k, inskickId, orsak, null, { namn: r.company.name, org_nr: r.company.org_nr });
       return logg("granskas", `inga_tvillingar: ${r.company.name}: ${rows[0]?.status}`);
     }
 
@@ -97,7 +98,7 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
     return logg(svar.skickat ? "skickat" : "fel", svar.fel || `${r.company.name}: ${tvillingar.length} tvillingar`);
   } catch (e: any) {
     // Hellre en post att granska än en förfrågan som försvinner.
-    await tillGranskning(f, k, inskickId, "fel", null, null).catch(() => {});
+    await tillGranskning(f, k, inskickId, arKvotSlut(e) ? "kvot" : "fel", null, null).catch(() => {});
     return logg("fel", String(e?.message || e));
   }
 }
