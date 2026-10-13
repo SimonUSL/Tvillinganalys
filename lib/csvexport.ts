@@ -77,9 +77,10 @@ export function byggCsv(rows: ResultRow[], admin = false): string {
   const kolumner = alla.filter((c) => rows.some((r) => { const v = hamta(r, c); return v !== null && v !== undefined && v !== ""; }));
   const cell = (v: unknown) => {
     const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return /[";,\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const rader = [kolumner.map((k) => cell(k.label)).join(",")];
-  for (const r of rows) rader.push(kolumner.map((k) => cell(hamta(r, k))).join(","));
+  // Semikolon: svenskt Excel delar då upp kolumnerna direkt när filen öppnas.
+  const rader = [kolumner.map((k) => cell(k.label)).join(";")];
+  for (const r of rows) rader.push(kolumner.map((k) => cell(hamta(r, k))).join(";"));
   return rader.join("\n");
 }

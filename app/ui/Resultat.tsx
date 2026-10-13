@@ -194,6 +194,9 @@ export default function Resultat({ admin, korning, leads, onTillbaka, onNy }: Pr
   const antalTvillingar = korning.rows.filter((r) => r.tvilling_namn).length;
   const medTvillingar = leads.filter((l) => (raderPerLead.get(l.id) || []).some((r) => r.tvilling_namn)).length;
   const klar = korning.status !== "kor";
+  // Hela körningen: alla bolag, även de utan tvillingar (med kommentar varför).
+  const laddaNer = () =>
+    korning.rows.length && laddaNerCsv(korning.rows, `tvillingar-${new Date().toISOString().slice(0, 10)}.csv`, admin);
 
   return (
     <div className="stack">
@@ -242,15 +245,8 @@ export default function Resultat({ admin, korning, leads, onTillbaka, onNy }: Pr
                   Ny sökning
                 </button>
               </div>
-              <button
-                type="button"
-                className="btn btn-primary"
-                aria-disabled={!korning.rows.length}
-                onClick={() =>
-                  korning.rows.length && laddaNerCsv(korning.rows, `tvillingar-${new Date().toISOString().slice(0, 10)}.csv`, admin)
-                }
-              >
-                Ladda ner resultatet (CSV)
+              <button type="button" className="btn btn-primary" aria-disabled={!korning.rows.length} onClick={laddaNer}>
+                Ladda ner hela körningen (CSV)
               </button>
             </div>
           </>
@@ -287,6 +283,17 @@ export default function Resultat({ admin, korning, leads, onTillbaka, onNy }: Pr
           admin={admin}
         />
       ))}
+
+      {klar && korning.rows.length > 0 && (
+        <div className="card row" style={{ justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <p style={{ margin: 0 }}>
+            <strong>Hela körningen som en fil:</strong> {leads.length} bolag och {antalTvillingar} tvillingar, med kontaktuppgifter. Öppnas i Excel.
+          </p>
+          <button type="button" className="btn btn-primary" onClick={laddaNer}>
+            Ladda ner hela körningen (CSV)
+          </button>
+        </div>
+      )}
     </div>
   );
 }
