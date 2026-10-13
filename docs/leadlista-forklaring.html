@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<title>Leadlista – förklaring av kolumnerna</title>
+<!-- Källa till public/mallar/leadlista-forklaring.pdf. Skriv ut som PDF med Chrome:
+     "Google Chrome" --headless --no-pdf-header-footer --print-to-pdf=public/mallar/leadlista-forklaring.pdf docs/leadlista-forklaring.html -->
+<style>
+  @page { size: A4; margin: 16mm 16mm 18mm; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; color: #2b2b2b; font-size: 10.5pt; line-height: 1.45; margin: 0; }
+  h1 { font-size: 20pt; margin: 0 0 4px; }
+  .sub { color: #5f5f66; margin: 0 0 16px; font-size: 11pt; }
+  h2 { font-size: 13pt; margin: 20px 0 6px; color: #c9474a; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; }
+  th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid #e7e4e2; }
+  th { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .04em; color: #5f5f66; border-bottom: 2px solid #2b2b2b; }
+  td.kol { font-weight: 700; white-space: nowrap; width: 22%; }
+  .val { display: inline-block; background: #fdeced; border-radius: 3px; padding: 0 5px; margin: 1px 2px 1px 0; font-weight: 600; font-size: 9.5pt; white-space: nowrap; }
+  .krav { font-size: 8.5pt; font-weight: 700; color: #c9474a; text-transform: uppercase; letter-spacing: .04em; }
+  .valfri { font-size: 8.5pt; color: #5f5f66; text-transform: uppercase; letter-spacing: .04em; }
+  ol, ul { margin: 4px 0 8px; padding-left: 18px; }
+  li { margin: 2px 0; }
+  .ex td { font-size: 9.5pt; }
+  .ex th { font-size: 8pt; }
+  .ruta { border: 1px solid #e7e4e2; border-left: 3px solid #c9474a; padding: 8px 12px; margin: 10px 0; }
+  .ruta p { margin: 0; }
+  footer { margin-top: 18px; color: #5f5f66; font-size: 8.5pt; }
+  .bryt { break-inside: avoid; }
+</style>
+</head>
+<body>
+  <h1>Leadlista – förklaring av kolumnerna</h1>
+  <p class="sub">Till mallen <strong>leadlista-mall.xlsx</strong> i Tvillinganalys. En rad per bolag som ni vill hitta tvillingar till.</p>
+
+  <h2>Så gör du</h2>
+  <ol>
+    <li>Ladda ner mallen från startsidan i Tvillinganalys och öppna den i Excel.</li>
+    <li>Fyll i en rad per bolag. Bara <strong>Bolagsnamn</strong> eller <strong>Org.nr</strong> krävs, resten är valfritt.</li>
+    <li>Spara filen som vanligt (Excel-format) och dra in den på startsidan.</li>
+    <li>Kontrollera listan i nästa steg och klicka <strong>Hitta tvillingar</strong>.</li>
+  </ol>
+  <p>Klicka i en cell i kolumnerna Lokalt bolag, Säsong, Samma storlek eller Kommun så visas en pil med värdena att välja mellan. En tom cell betyder alltid att verktyget avgör själv.</p>
+
+  <h2>Kolumnerna</h2>
+  <table>
+    <thead><tr><th>Kolumn</th><th>Vad som fylls i</th></tr></thead>
+    <tbody>
+      <tr class="bryt">
+        <td class="kol">Bolagsnamn<br><span class="krav">Krävs om org.nr saknas</span></td>
+        <td>Bolagets namn, gärna som det står i bolagsregistret. Aktiebolag, AB och liknande behöver inte skrivas ut.<br>Exempel: <span class="val">SkiStar</span> <span class="val">Kockarnas Matlucka AB</span></td>
+      </tr>
+      <tr class="bryt">
+        <td class="kol">Org.nr<br><span class="valfri">Valfri</span></td>
+        <td>Bolagets organisationsnummer, med eller utan bindestreck. Pekar ut rätt bolag direkt, vilket är bra när många bolag har liknande namn.<br>Exempel: <span class="val">556093-6949</span> <span class="val">5560936949</span></td>
+      </tr>
+      <tr class="bryt">
+        <td class="kol">Lokalt bolag<br><span class="valfri">Valfri</span></td>
+        <td>
+          <span class="val">Ja</span> bolaget har kunder i sitt närområde, till exempel en restaurang, hantverkare eller butik. Tvillingarna söks då nära bolaget, först i dess kommun och sedan i länet.<br>
+          <span class="val">Nej</span> bolaget har kunder i hela landet. Tvillingarna söks i hela Sverige.<br>
+          <span class="val">Låt verktyget avgöra</span> eller tom cell: verktyget avgör utifrån bolagets verksamhet.
+        </td>
+      </tr>
+      <tr class="bryt">
+        <td class="kol">Säsong<br><span class="valfri">Valfri</span></td>
+        <td>
+          När bolaget har mest att göra. Bolag med samma säsong prioriteras bland tvillingarna.<br>
+          <span class="val">Ingen</span> <span class="val">Vinter</span> <span class="val">Vår</span> <span class="val">Sommar</span> <span class="val">Höst</span> <span class="val">Jul</span><br>
+          <span class="val">Låt verktyget avgöra</span> eller tom cell: verktyget avgör. De flesta bolag har ingen tydlig säsong.
+        </td>
+      </tr>
+      <tr class="bryt">
+        <td class="kol">Samma storlek<br><span class="valfri">Valfri</span></td>
+        <td>
+          <span class="val">Ja</span> bara bolag av nästan samma storlek (omsättning och anställda). Ger färre men mer jämförbara tvillingar.<br>
+          <span class="val">Nej</span> eller tom cell: storleken vägs in, men även större och mindre bolag kan komma med.
+        </td>
+      </tr>
+      <tr class="bryt">
+        <td class="kol">Kommun<br><span class="valfri">Valfri</span></td>
+        <td>
+          Välj en av Sveriges 290 kommuner när tvillingarna ska ligga i ett visst område. Tvillingarna söks då först i hela kommunen, alla dess orter, och därefter i resten av länet. En ifylld kommun gör alltid sökningen lokal, även om Lokalt bolag är Nej.<br>
+          Exempel: <span class="val">Lerum</span> ger tvillingar i Lerum, Floda, Gråbo, Stenkullen med flera.
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2 class="bryt">Exempel</h2>
+  <table class="ex bryt">
+    <thead><tr><th>Bolagsnamn</th><th>Org.nr</th><th>Lokalt bolag</th><th>Säsong</th><th>Samma storlek</th><th>Kommun</th></tr></thead>
+    <tbody>
+      <tr><td>SkiStar</td><td></td><td>Nej</td><td>Vinter</td><td></td><td></td></tr>
+      <tr><td>Kockarnas Matlucka AB</td><td>559080-3655</td><td></td><td></td><td></td><td>Lerum</td></tr>
+      <tr><td>Nordic Städ AB</td><td></td><td>Ja</td><td>Ingen</td><td>Ja</td><td></td></tr>
+      <tr><td></td><td>556093-6949</td><td></td><td></td><td></td><td></td></tr>
+    </tbody>
+  </table>
+
+  <div class="ruta bryt">
+    <p><strong>Hur många bolag per lista?</strong> Varje bolag kan använda några sökningar i det betalda bolagsregistret, som har ett begränsat antal per månad. Innan ni kör visar verktyget hur många sökningar listan använder som mest och hur många som finns kvar. Bolag och branscher som redan sökts kostar inget, och lokala bolag klaras ofta helt med det fria registret.</p>
+  </div>
+
+  <h2 class="bryt">Bra att veta</h2>
+  <ul>
+    <li>Första raden ska vara kolumnnamnen. Ändra eller ta bort inte dem.</li>
+    <li>Tomma rader hoppas över. Upp till 500 rader har färdiga val.</li>
+    <li>CSV fungerar också, med samma kolumnnamn och komma eller semikolon mellan värdena.</li>
+    <li>Är något fel i en rad, till exempel en okänd kommun, visar verktyget det innan något söks.</li>
+    <li>Resultatet visas direkt och sparas under Historik, där det kan laddas ner som Excel-fil.</li>
+  </ul>
+
+  <footer>Tvillinganalys · Optimal Kommunikation</footer>
+</body>
+</html>

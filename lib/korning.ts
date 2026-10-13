@@ -82,6 +82,8 @@ export interface LeadIn {
   geo?: string;
   sasong?: string;
   strikt?: string;
+  // Kommun att fokusera tvillingarna i (leadlistan). Gör alltid urvalet lokalt.
+  kommun?: string;
   // Redan identifierat bolag (formulärimporten gör det själv).
   resolved?: SourceResult;
   // Förfrågningskolumner som ska följa med på varje rad.
@@ -139,7 +141,8 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
 
   // Ifyllda CSV-celler gäller. Tomma geografi/säsong-celler gissar Jev
   // utifrån kallbolagets verksamhetsbeskrivning.
-  const geoCell = (lead.geo || "").trim();
+  // En angiven kommun betyder alltid ett lokalt urval.
+  const geoCell = lead.kommun ? "ja" : (lead.geo || "").trim();
   const sasongCell = (lead.sasong || "").trim();
   const options: LeadOptions = {
     geografi_relevant: arJa(geoCell),
@@ -168,7 +171,7 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   // nämner (alla deras postorter), sedan i länet.
   let naraKommuner: string[] = [];
   if (options.geografi_relevant) {
-    const n = naraOrter(source.ort, kommunerIText(lead.extra?.forfragan_text));
+    const n = naraOrter(source.ort, [...(lead.kommun ? [lead.kommun] : []), ...kommunerIText(lead.extra?.forfragan_text)]);
     options.orter = n.orter;
     naraKommuner = n.kommuner;
   }

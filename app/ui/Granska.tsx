@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import type { Grupp, Kalla, Rad } from "./typer";
-import { forfraganEtikett, hoppaText, matchningText } from "./klartext";
+import type { Kvot } from "@/lib/kvot";
+import { kortDatum } from "./klartext";
+import { forfraganEtikett, hoppaText, matchningText, sasongText } from "./klartext";
 
 interface Props {
   admin: boolean;
@@ -12,6 +14,7 @@ interface Props {
   maxTic: string;
   setMaxTic: (s: string) => void;
   standardTak: number;
+  kvot: Kvot | null; // sökningar kvar i det betalda registret
   onTillbaka: () => void;
   onKor: () => void;
   onTaBort?: (r: Rad) => void; // granskningskön: ta bort posten
@@ -86,10 +89,11 @@ function Rad({ r, andra, kalla, admin, onTaBort }: { r: Rad; andra: Props["andra
           </>
         ) : (
           <div className="meta">
-            {r.geo && <span className="badge">geografi: {r.geo}</span>}
-            {r.sasong && <span className="badge">säsong: {r.sasong}</span>}
-            {r.strikt && <span className="badge">strikt storlek: {r.strikt}</span>}
-            {!r.geo && !r.sasong && <span>Geografi och säsong fylls i automatiskt.</span>}
+            {r.kommun && <span className="badge badge-info">Kommun: {r.kommun}</span>}
+            {r.geo && !r.kommun && <span className="badge">{r.geo === "ja" ? "Lokalt bolag" : "Rikstäckande"}</span>}
+            {r.sasong && <span className="badge">{sasongText(r.sasong === "ingen" ? null : r.sasong) || "Ingen säsong"}</span>}
+            {r.strikt && <span className="badge">Samma storlek</span>}
+            {!r.geo && !r.sasong && !r.kommun && <span>Geografi och säsong fylls i automatiskt.</span>}
           </div>
         )}
       </div>
@@ -216,6 +220,8 @@ export default function Granska(p: Props) {
         );
       })}
 
+      <KvotRad admin={p.admin} tak={p.maxTic.trim() !== "" ? Number(p.maxTic) : p.standardTak} kvot={p.kvot} antal={valda.length} />
+
       <div className="action-bar">
         <button type="button" className="btn" onClick={p.onTillbaka}>
           ← Tillbaka
@@ -241,6 +247,42 @@ export default function Granska(p: Props) {
           Hitta tvillingar för {valda.length} bolag →
         </button>
       </div>
+    </div>
+  );
+}
+
+// Hur många sökningar i det betalda registret körningen kan använda, mot hur många som finns kvar.
+export const kvotGaller = (k: Kvot | null) => !!k && (!k.aterstalls || new Date(k.aterstalls).getTime() > Date.now());
+
+function KvotRad({ admin, tak, kvot, antal }: { admin: boolean; tak: number; kvot: Kvot | null; antal: number }) {
+  if (!antal) return null;
+  const register = admin ? "tic.io" : "det betalda registret";
+  const kand = kvotGaller(kvot) ? kvot! : null;
+  const tid = (iso: string) => `${kortDatum(iso)} ${new Date(iso).toLocaleTimeString("sv-SE", { hour: "2-digit", minute: "2-digit" })}`;
+  const forManga = !!kand && tak > kand.kvar;
+  return (
+    <div className={`note${forManga ? " warn" : ""}`} style={{ marginTop: 16 }} role="status">
+      <p style={{ margin: 0 }}>
+        Listan använder <strong>högst {tak} sökningar</strong> i {register}
+        {kand ? (
+          <>
+            {" "}av <strong>{kand.kvar} kvar</strong>
+            {kand.grans ? ` (av ${kand.grans})` : ""}
+            {kand.aterstalls ? `, fylls på ${kortDatum(kand.aterstalls)}` : ""}.
+          </>
+        ) : (
+          "."
+        )}{" "}
+        Bolag och branscher som redan sökts kostar inget, så det blir oftast färre.
+      </p>
+      {forManga && (
+        <p style={{ margin: "6px 0 0" }}>
+          Det är fler än som finns kvar. Körningen stannar vid {kand!.kvar}; bolagen efter det får tvillingar bara från det fria registret, vilket ofta räcker för lokala bolag.
+        </p>
+      )}
+      <p className="hint" style={{ margin: "6px 0 0" }}>
+        {kand ? `Kvar uppdaterades ${tid(kand.uppdaterad)}.` : "Hur många som är kvar visas efter nästa sökning."}
+      </p>
     </div>
   );
 }

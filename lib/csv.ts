@@ -2,8 +2,19 @@
 // "anteckning"-kolumn). Inte en fullständig RFC4180-parser, men räcker för
 // vår enkla leads.csv.
 
+// Svenskt Excel sparar CSV med semikolon - avgränsaren gissas från rubrikraden.
 export function parseCsv(text: string): Record<string, string>[] {
-  const rows = splitCsvLines(text);
+  return raderTillPoster(parseCsvRader(text));
+}
+
+export function parseCsvRader(text: string): string[][] {
+  const forsta = text.replace(/^\uFEFF/, "").split("\n")[0] || "";
+  const sep = (forsta.match(/;/g) || []).length > (forsta.match(/,/g) || []).length ? ";" : ",";
+  return splitCsvLines(text.replace(/^\uFEFF/, ""), sep);
+}
+
+// Rubrikrad + rader -> en post per rad, nycklad på rubrikerna.
+export function raderTillPoster(rows: string[][]): Record<string, string>[] {
   if (!rows.length) return [];
   const header = rows[0].map((h) => h.trim());
   return rows.slice(1).map((cols) => {
@@ -15,7 +26,7 @@ export function parseCsv(text: string): Record<string, string>[] {
   });
 }
 
-function splitCsvLines(text: string): string[][] {
+function splitCsvLines(text: string, sep = ","): string[][] {
   const lines: string[][] = [];
   let field = "";
   let row: string[] = [];
@@ -38,7 +49,7 @@ function splitCsvLines(text: string): string[][] {
     } else {
       if (c === '"') {
         inQuotes = true;
-      } else if (c === ",") {
+      } else if (c === sep) {
         row.push(field);
         field = "";
       } else if (c === "\n") {

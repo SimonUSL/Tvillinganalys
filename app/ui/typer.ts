@@ -31,6 +31,7 @@ export interface Rad {
   geo?: string;
   sasong?: string;
   strikt?: string;
+  kommun?: string; // fokusera tvillingarna i den här kommunen
 }
 
 export interface Korning {

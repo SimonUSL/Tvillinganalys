@@ -2,11 +2,10 @@
 
 import { useEffect, useState } from "react";
 import type { GranskaPost } from "@/lib/granskning";
-import type { Forhandsrad } from "../api/preview/route";
 import type { Handelse } from "../api/run/route";
-import { parseCsv } from "@/lib/csv";
-import Underlag, { CSV_EXEMPEL, isoDag } from "./Underlag";
-import Granska, { harBolag } from "./Granska";
+import Underlag, { type Lista } from "./Underlag";
+import Granska, { harBolag, kvotGaller } from "./Granska";
+import type { Kvot } from "@/lib/kvot";
 import Resultat from "./Resultat";
 import Sidhuvud from "./Sidhuvud";
 import type { Kalla, Korning, Rad, Steg } from "./typer";
@@ -24,16 +23,22 @@ const STEG: { id: Steg; text: string }[] = [
 export default function App({ admin = false, ko = false }: { admin?: boolean; ko?: boolean }) {
   const [steg, setSteg] = useState<Steg>(ko ? "granska" : "underlag");
   const [koLaddad, setKoLaddad] = useState(!ko);
-  const [kalla, setKalla] = useState<Kalla>("export");
-  const [filer, setFiler] = useState<{ name: string; text: string }[]>([]);
-  const [fran, setFran] = useState(() => isoDag(new Date(Date.now() - 7 * 24 * 3600 * 1000)));
-  const [till, setTill] = useState(() => isoDag(new Date()));
-  const [csv, setCsv] = useState(CSV_EXEMPEL);
+  // Granskningskön har förfrågningar; verktyget en uppladdad leadlista.
+  const kalla: Kalla = ko ? "export" : "csv";
+  const [lista, setLista] = useState<Lista | null>(null);
+  const [kvot, setKvot] = useState<Kvot | null>(null);
+  const hamtaKvot = () =>
+    fetch("/api/kvot")
+      .then((r) => r.json())
+      .then((d) => setKvot(d.kvot || null))
+      .catch(() => {});
+  useEffect(() => {
+    hamtaKvot();
+  }, []);
   const [rader, setRader] = useState<Rad[]>([]);
   const [maxTic, setMaxTic] = useState("");
   const [korning, setKorning] = useState<Korning | null>(null);
   const [korda, setKorda] = useState<Rad[]>([]);
-  const [laddar, setLaddar] = useState(false);
   const [fel, setFel] = useState<string | null>(null);
 
   const valda = rader.filter((r) => r.vald && harBolag(r));
@@ -44,66 +49,23 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
     setRader((rs) => rs.map((r) => (r.id === id ? { ...r, ...falt } : r)));
   }
 
-  async function tillGranskning() {
+  function tillGranskning() {
+    if (!lista) return;
     setFel(null);
-    if (kalla === "csv") {
-      const leads = parseCsv(csv);
-      if (!leads.length || !("foretagsnamn" in leads[0])) {
-        setFel("CSV:n behöver en rubrikrad med kolumnen foretagsnamn.");
-        return;
-      }
-      setRader(
-        leads
-          .filter((l) => (l.foretagsnamn || "").trim() || (l.org_nr || "").trim())
-          .map((l, id) => ({
-            id,
-            grupp: "valda",
-            vald: true,
-            namn: (l.foretagsnamn || "").trim(),
-            org: (l.org_nr || l.orgnr || l.organisationsnummer || "").trim(),
-            geo: (l.geografi_relevant || "").trim(),
-            sasong: (l.sasongseffekt || "").trim(),
-            strikt: (l.storlek_strikt || "").trim(),
-          }))
-      );
-      setSteg("granska");
-      return;
-    }
-    setLaddar(true);
-    try {
-      const resp = await fetch("/api/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exports: filer, from: fran, to: till }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Förhandsgranskningen misslyckades.");
-      setRader(
-        (data.rader as Forhandsrad[]).map((r) => ({
-          id: r.id,
-          grupp: r.hoppa_kod ? "hoppas" : r.bolag_org_nr ? "valda" : "behover",
-          vald: !r.hoppa_kod && !!r.bolag_org_nr,
-          namn: r.bolag_namn || "",
-          org: r.bolag_org_nr || "",
-          datum: r.datum,
-          formular: r.formular,
-          doman: r.doman,
-          typ: r.typ,
-          typ_kod: r.typ_kod,
-          avsandare_kod: r.avsandare_kod,
-          hoppa_kod: r.hoppa_kod,
-          matchning_kod: r.matchning_kod,
-          text: r.text,
-          kommentar: r.hoppa || r.matchning,
-          forslag: r.forslag ?? undefined,
-        }))
-      );
-      setSteg("granska");
-    } catch (e: any) {
-      setFel(e.message || String(e));
-    } finally {
-      setLaddar(false);
-    }
+    setRader(
+      lista.leads.map((l, id) => ({
+        id,
+        grupp: "valda",
+        vald: true,
+        namn: l.namn,
+        org: l.org,
+        geo: l.geo,
+        sasong: l.sasong,
+        strikt: l.strikt,
+        kommun: l.kommun,
+      }))
+    );
+    setSteg("granska");
   }
 
   // Granskningskön: hämta posterna.
@@ -160,13 +122,15 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
           // Från granskningskön: resultatet mejlas till säljarna som de automatiska.
           kalla: ko ? "granska" : "verktyg",
           // Kunden ser inte taket; standardtaket gäller då alltid.
-          max_tic_anrop: admin && maxTic.trim() !== "" ? Number(maxTic) : standardTak,
+          // Aldrig fler än som finns kvar hos tic.io (sparade svar kostar inget).
+          max_tic_anrop: Math.min(admin && maxTic.trim() !== "" ? Number(maxTic) : standardTak, kvotGaller(kvot) ? kvot!.kvar : Infinity),
           leads: leads.map((r) => ({
             namn: r.namn.trim(),
             org_nr: r.org.trim(),
             geo: r.geo,
             sasong: r.sasong,
             strikt: r.strikt,
+            kommun: r.kommun,
             extra: {
               lead_id: r.id,
               ...(kalla === "export"
@@ -212,6 +176,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
           });
         }
       }
+      hamtaKvot();
       // Avbröts strömmen utan "klar" (t.ex. tidsgräns) visas det som fel.
       setKorning((k) => (k && k.status === "kor" ? { ...k, status: "fel", fel: "anslutningen bröts innan körningen var klar" } : k));
       // Granskningskön: leads som fick tvillingar är hanterade och tas bort ur kön.
@@ -250,7 +215,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
         ? ["Leads att granska", "Förfrågningar som kom in automatiskt men behöver din hjälp: fyll i eller rätta bolaget och ta fram tvillingarna."]
         : ["Inget att granska", "Alla automatiska förfrågningar är hanterade."]
       : steg === "underlag"
-      ? ["Hitta tvillingbolag", "Välj underlag. Du granskar listan innan något söks, och kan ändra vilka bolag som tas med."]
+      ? ["Hitta tvillingbolag", "Ladda upp en leadlista. Du granskar listan innan något söks, och kan ändra vilka bolag som tas med."]
       : steg === "granska"
         ? [
             kalla === "export" ? "Granska förfrågningarna" : "Granska listan",
@@ -287,21 +252,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
         )}
 
         {steg === "underlag" && (
-          <Underlag
-            admin={admin}
-            kalla={kalla}
-            setKalla={setKalla}
-            filer={filer}
-            setFiler={setFiler}
-            fran={fran}
-            setFran={setFran}
-            till={till}
-            setTill={setTill}
-            csv={csv}
-            setCsv={setCsv}
-            laddar={laddar}
-            onNasta={tillGranskning}
-          />
+          <Underlag lista={lista} setLista={setLista} onNasta={tillGranskning} />
         )}
         {steg === "granska" && (
           <Granska
@@ -312,6 +263,7 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
             maxTic={maxTic}
             setMaxTic={setMaxTic}
             standardTak={standardTak}
+            kvot={kvot}
             onTillbaka={() => (ko ? (window.location.href = admin ? "/admin" : "/") : setSteg("underlag"))}
             onTaBort={ko ? taBortUrKo : undefined}
             onKor={kor}

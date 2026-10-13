@@ -20,6 +20,7 @@ interface GranskatLead {
   geo?: string;
   sasong?: string;
   strikt?: string;
+  kommun?: string;
   extra?: Partial<ResultRow>;
 }
 
@@ -90,7 +91,7 @@ export async function POST(req: NextRequest) {
         } else {
           sedda.add(nyckel);
           rader = await processLead(
-            { namn: namn || orgNr, orgNr, geo: lead.geo, sasong: lead.sasong, strikt: lead.strikt, extra: lead.extra },
+            { namn: namn || orgNr, orgNr, geo: lead.geo, sasong: lead.sasong, strikt: lead.strikt, kommun: lead.kommun, extra: lead.extra },
             ctx
           );
           await efterLead(rader);

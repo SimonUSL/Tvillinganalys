@@ -1,4 +1,5 @@
 import { cacheGet, cacheNyckel, cacheSet } from "./cache";
+import { kvotFranSvar, sparaKvot } from "./kvot";
 import { Kontakt, kontaktFranBolagsdata, kontaktFranTic, slaIhop } from "./kontakt";
 
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
@@ -635,6 +636,10 @@ async function ticSearchUncached(tic: Tic, body: Record<string, any>): Promise<T
     headers: { "x-api-key": tic.key, "Content-Type": "application/json" },
     body: JSON.stringify({ per_page: TIC_MAX_PER_PAGE, page: 1, ...body }),
   });
+  // Kvoten (sökningar kvar) står i svarshuvudena - spara den så att verktyget kan visa den.
+  const kvot = kvotFranSvar(resp.headers);
+  if (kvot) await sparaKvot(kvot);
+  console.log(JSON.stringify({ steg: "tic-kvot", kvar: kvot?.kvar ?? null, grans: kvot?.grans ?? null, huvuden: kvot ? undefined : [...resp.headers.keys()].filter((k) => /rate|limit|quota/i.test(k)) }));
   if (!resp.ok) {
     throw new Error(`tic.io-sokning misslyckades (${resp.status}): ${(await resp.text()).slice(0, 300)}`);
   }

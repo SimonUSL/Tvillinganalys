@@ -40,8 +40,8 @@ Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifiera
 
 ## Gränssnittet — tre steg
 
-1. **Underlag** (`app/ui/Underlag.tsx`): formulärexporter (dra in filerna, välj period) eller egen CSV-lista.
-2. **Granska** (`app/ui/Granska.tsx`): förfrågningarna i tre grupper — *Föreslås*, *Behöver bolag* (fyll i namn/org.nr eller godta Jevs osäkra förslag med ett klick) och *Hoppas över* (med orsak, går att ta med ändå). Åtgärdsfältet längst ned har taket för tic.io-anrop. Inget har sökts i det här steget.
+1. **Underlag** (`app/ui/Underlag.tsx`): dra in en leadlista, Excel eller CSV (`lib/leadlista.ts` läser den i webbläsaren med SheetJS). Mallen `public/mallar/leadlista-mall.xlsx` har kolumnerna Bolagsnamn, Org.nr, Lokalt bolag, Säsong, Samma storlek och Kommun, med rullistor (de 290 kommunerna ligger på ett dolt blad). Förklaringen `public/mallar/leadlista-forklaring.pdf` skrivs ut ur `docs/leadlista-forklaring.html` med Chrome (kommandot står i filen). CSV får ha komma eller semikolon. En ifylld kommun gör alltid urvalet lokalt och söks som bolagets egen kommun. Formulärexporter och datumval finns inte längre i gränssnittet (`/api/preview` används inte).
+2. **Granska** (`app/ui/Granska.tsx`): förfrågningarna i tre grupper — *Föreslås*, *Behöver bolag* (fyll i namn/org.nr eller godta Jevs osäkra förslag med ett klick) och *Hoppas över* (med orsak, går att ta med ändå). Åtgärdsfältet längst ned har taket för tic.io-anrop. Ovanför står hur många tic.io-sökningar listan använder som mest (3 per bolag) mot hur många som är kvar; körningens tak blir aldrig högre än det som är kvar. Inget har sökts i det här steget.
 3. **Tvillingar** (`app/ui/Resultat.tsx`): förloppet strömmas från `/api/run` (NDJSON, ett bolag i taget) och resultaten visas per bolag med varför det valdes, hur tvillingarna togs fram och tvillingtabellen. Sammanfattning och CSV-nedladdning överst.
 
 Stilar och färger: `app/globals.css` (Optimals röd #EB5F62, Poppins).
@@ -111,6 +111,10 @@ tic.io-anrop per lead: **0 när bolagsdataapi räcker** (typiskt lokala hantverk
 4. **Kontaktperson** (foretagskontakt.se, valfri).
 
 Kolumnerna Matchning, Urval, Geografi, Säsong och Likhet visar varför varje val gjordes.
+
+## Kvar hos tic.io — `lib/kvot.ts`, `/api/kvot`
+
+tic.io skickar kvoten i svarshuvudena på varje sökning (`x-ratelimit-remaining`, `-limit`, `-reset`). Senaste värdet sparas i Redis (`tic:kvot`) och visas i Granska-steget. Varje sökning loggar `"steg":"tic-kvot"`; saknas huvudena loggas vilka rate-limit-huvuden som fanns. Värdet räknas som okänt när återställningstiden passerat.
 
 ## Cache mellan körningar — `lib/cache.ts`
 

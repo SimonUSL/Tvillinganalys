@@ -1,7 +1,7 @@
 // kommuner.ts — Sveriges 290 kommuner, för att hitta orter som nämns i en
 // förfrågan ("ett utskick till alla i Lerums kommun"). Ren textmatchning.
 
-const KOMMUNER = (
+export const KOMMUNER = (
   // Stockholm
   "Botkyrka,Danderyd,Ekerö,Haninge,Huddinge,Järfälla,Lidingö,Nacka,Norrtälje,Nykvarn,Nynäshamn,Salem,Sigtuna,Sollentuna,Solna," +
   "Stockholm,Sundbyberg,Södertälje,Tyresö,Täby,Upplands-Bro,Upplands Väsby,Vallentuna,Vaxholm,Värmdö,Österåker," +
