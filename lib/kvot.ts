@@ -16,7 +16,7 @@ export interface Kvot {
 
 // Ett nytt bolag använder ungefär så här många anrop hos bolagsdataapi
 // (sökningar + verksamhetsbeskrivningar för kandidaterna). Sparade svar kostar inget.
-export const BD_PER_BOLAG = 35;
+export const BD_PER_BOLAG = 25;
 // Så många anrop per dygn sparas åt förfrågningarna från webbplatsen: en
 // manuell lista stannar innan den tar dem.
 export const BD_RESERV = 60;

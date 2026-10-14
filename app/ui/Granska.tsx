@@ -256,7 +256,7 @@ export default function Granska(p: Props) {
 export const kvotGaller = (k: Kvot | null) => !!k && (!k.aterstalls || new Date(k.aterstalls).getTime() > Date.now());
 
 // Måste stämma med BD_PER_BOLAG och BD_RESERV i lib/kvot.ts.
-const BD_PER_BOLAG = 35;
+const BD_PER_BOLAG = 25;
 const BD_RESERV = 60;
 
 function KvotRad({ admin, tak, kvot, bdKvot, antal }: { admin: boolean; tak: number; kvot: Kvot | null; bdKvot: Kvot | null; antal: number }) {
