@@ -1,5 +1,6 @@
 import { cacheGet, cacheNyckel, cacheSet } from "./cache";
 import { kvarIMinnet, kvotFranSvar, sparaKvot } from "./kvot";
+import { ScbForetag, scbBransch, scbForetag } from "./scb";
 import { Kontakt, kontaktFranBolagsdata, kontaktFranTic, slaIhop } from "./kontakt";
 
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
@@ -923,9 +924,14 @@ function ordstam(ord: string): string {
 }
 
 export async function pickPurposeKeyword(profile: TicProfile, typesafeKey: string): Promise<string | null> {
+  return (await pickPurposeKeywords(profile, typesafeKey, 1))[0] ?? null;
+}
+
+// De `antal` ord som Jev tycker bäst beskriver kärnverksamheten, bäst först.
+export async function pickPurposeKeywords(profile: TicProfile, typesafeKey: string, antal: number): Promise<string[]> {
   const ord = beskrivningsord(profile.business_description || "");
-  if (!ord.length) return null;
-  if (ord.length === 1) return ordstam(ord[0]).replace(/-/g, " ");
+  if (!ord.length) return [];
+  if (ord.length === 1) return [ordstam(ord[0]).replace(/-/g, " ")];
   const criteria: Record<string, string | null> = {};
   for (const o of ord) criteria[o] = null;
   criteria.inget = "None of the words names what the company actually does.";
@@ -948,9 +954,15 @@ export async function pickPurposeKeyword(profile: TicProfile, typesafeKey: strin
     }),
   });
   if (!resp.ok) throw new Error(`Jev ${resp.status}: ${(await resp.text()).slice(0, 120)}`);
-  const choice: string = (await resp.json()).answers.nyckelord.choice;
+  const svar = (await resp.json()).answers.nyckelord;
+  const sannolikhet: Record<string, number> = svar.probabilities || { [svar.choice]: 1 };
   // "vvs-installation" -> "vvs installation" (tic.io delar ändå orden vid bindestreck)
-  return choice === "inget" ? null : ordstam(choice).replace(/-/g, " ");
+  return Object.entries(sannolikhet)
+    .filter(([o]) => o !== "inget")
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, antal)
+    .filter(([, p], i) => i === 0 || p >= 0.05)
+    .map(([o]) => ordstam(o).replace(/-/g, " "));
 }
 
 // tic.io:s filter släpper bara igenom bolag som HAR fältet. Många saknar
@@ -1078,11 +1090,96 @@ export async function findTwins(
     }
   };
 
-  // --- Fas 0: bolagsdataapi (500 anrop/dygn) före tic.io (200/mån) ----------
-  // Sök bolag vars NAMN innehåller branschordet (t.ex. "städ"), i samma län om
-  // geografin är relevant och i samma storleksklass. Fungerar bäst för lokala
-  // hantverks- och tjänstebolag - just de trånga branscher som kostar mest hos tic.io.
-  if (bolagsdataKey && typesafeKey) {
+  const scbKey = process.env.SCB_API_KEY;
+  // SCB:s närmaste bolag, om bolagsdataapi:s dygnskvot tar slut (se nedan).
+  let scbReserv: ScbForetag[] = [];
+  let kvotSlut = false;
+  try {
+  // --- Steg 1: SCB - alla bolag i branschen, gratis och utan kvot ------------
+  // Kandidaterna väljs ur källbolagets egen bransch hos SCB: närmaste orter
+  // först (lokala bolag, samma län), sedan närmast i storlek, med Jevs
+  // namnsållning. Verksamhetsbeskrivningen hämtas från bolagsdataapi och
+  // avgör sedan om de liknar källbolaget.
+  if (scbKey && bolagsdataKey && typesafeKey) {
+    try {
+      const egen = await scbForetag(sourceOrgNr, scbKey);
+      const koder = [...new Set([egen?.sni, ...(source.sni_codes || [])].filter(Boolean) as string[])];
+      let bransch: { foretag: ScbForetag[]; kapad: boolean; anrop: number } = { foretag: [], kapad: false, anrop: 0 };
+      for (const kod of koder) {
+        bransch = await scbBransch(kod, scbKey);
+        logg.scb_bransch = { kod, bolag: bransch.foretag.length, kapad: bransch.kapad, anrop: bransch.anrop };
+        if (bransch.foretag.length) break;
+      }
+      const lokal = options.geografi_relevant && egen?.lanKod;
+      // Storleksavstånd i klasser: omsättningsklass i första hand, annars anställda.
+      const avstand = (f: ScbForetag) =>
+        egen?.omsKl != null && f.omsKl != null ? Math.abs(f.omsKl - egen.omsKl) : egen ? Math.abs(f.anstKl - egen.anstKl) : 0;
+      const naraOrt = (f: ScbForetag) => (f.postOrt && naraOrter.has(normOrt(f.postOrt)) ? 1 : 0);
+      const urvalScb: ScbForetag[] = bransch.foretag
+        .filter((f) => !seen.has(f.orgNr) && !excludeOrgNrs.has(f.orgNr))
+        .filter((f) => !lokal || f.lanKod === egen!.lanKod)
+        .filter((f) => !options.storlek_strikt || avstand(f) <= 1)
+        .sort((a, b) => naraOrt(b) - naraOrt(a) || avstand(a) - avstand(b))
+        .slice(0, SCB_FORURVAL);
+      // Stora branscher har hundratals lika stora bolag: Jev sållar på namnen
+      // (gratis) så att detaljanropen går till de mest lovande.
+      if (urvalScb.length > SCB_KANDIDATER) {
+        const svar = await fetch(TYPESAFE_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${typesafeKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "jev-latest",
+            state: {
+              source: { name: ticSource.profile.name, business_description: ticSource.profile.business_description },
+              names: urvalScb.map((f) => f.namn),
+            },
+            questions: Object.fromEntries(
+              urvalScb.map((_, i) => [`n_${i}`, { type: "noul", instructions: `Does the company name \`names[${i}]\` suggest the same kind of business as \`source\`?` }])
+            ),
+          }),
+        });
+        if (svar.ok) {
+          const a = (await svar.json()).answers;
+          const p = new Map(urvalScb.map((f, i) => [f, a[`n_${i}`]?.noul ?? 0]));
+          // Namnet är bara en ledtråd: bäst namn först, sedan storleksordning.
+          urvalScb.sort((x, y) => naraOrt(y) - naraOrt(x) || Number(p.get(y)! >= MIN_NAMN_LIKHET) - Number(p.get(x)! >= MIN_NAMN_LIKHET) || p.get(y)! - p.get(x)!);
+        }
+      }
+      scbReserv = urvalScb.slice(0, MAX_TWINS_PER_LEAD * 2);
+      urvalScb.splice(options.geografi_relevant ? SCB_KANDIDATER_LOKAL : SCB_KANDIDATER);
+      logg.scb = { kandidater: urvalScb.length, reklamsparr: urvalScb.filter((f) => f.reklamSparr).length };
+      const detaljer = await mapLimit(urvalScb, 5, async (f) => {
+        try {
+          return { f, d: await bolagsdataDetails(f.orgNr, bolagsdataKey, { org_nr: f.orgNr, name: f.namn, postal_town: f.postOrt }, "") };
+        } catch (e) {
+          if (arKvotSlut(e)) throw e;
+          return null;
+        }
+      });
+      const pool: { company: Twin; profile: TicProfile }[] = [];
+      for (const x of detaljer) {
+        if (!x?.d.company || !x.d.ticSource || seen.has(x.d.company.org_nr)) continue;
+        seen.add(x.d.company.org_nr);
+        const company: Twin = { ...x.d.company, matchning: null, verksamhet: x.d.ticSource.profile.business_description };
+        koncernInfo.set(company, { name: company.name, address: company.ort ?? null, website: x.d.ticSource.profile.website, owned_through: [] });
+        pool.push({ company, profile: x.d.ticSource.profile });
+      }
+      await judgePool(pool);
+      if (pool.length) {
+        urvalDelar.push(`SCB: bransch ${logg.scb_bransch?.kod} (${bransch.foretag.length} bolag)${lokal ? ", samma län" : ""}, närmast i storlek`);
+        urvalKod = "storlek";
+      }
+    } catch (e: any) {
+      if (arKvotSlut(e)) throw e;
+      logg.scb_fel = String(e.message || e);
+    }
+  }
+
+  // --- Steg 2: bolagsdataapi - bolag med branschordet i namnet ---------------
+  // T.ex. "städ", i närmaste orter och länet om geografin är relevant och i
+  // samma storleksklass. Hittar rätt sorts bolag även när branschkoden är fel.
+  // Bara om SCB inte redan gav tillräckligt många starka tvillingar.
+  if (bolagsdataKey && typesafeKey && starka < MIN_STARKA_TVILLINGAR) {
     try {
       const fas0 = await bolagsdataCandidates(source, ticSource, options, bolagsdataKey, typesafeKey, seen, excludeOrgNrs);
       logg.bolagsdata = fas0.logg;
@@ -1097,17 +1194,104 @@ export async function findTwins(
       }
       if (fas0.pool.length) {
         urvalDelar.push(fas0.urval);
-        urvalKod = "namn";
+        if (urvalKod === "inga") urvalKod = "namn";
       }
     } catch (e: any) {
-      if (arKvotSlut(e)) throw e; // inte vidare till tic.io
+      if (arKvotSlut(e)) throw e; // inte vidare till tic.io (se kvotSlut nedan)
       logg.bolagsdata_fel = String(e.message || e);
     }
   }
 
-  // --- tic.io: bara om bolagsdataapi inte gav tillräckligt ------------------
+  // --- Steg 3: sökning i verksamhetsbeskrivningar ---------------------------
+  // När branschkoden inte gav bra tvillingar (t.ex. ett elektromekaniskt bolag
+  // registrerat som metallindustri): sök på de tre ord som bäst beskriver
+  // verksamheten hos bolagsdataapi, vars sökning även träffar beskrivningarna.
+  // Testat 2026-10-14: Jaco Fabriks 0 -> 3 direkta konkurrenter.
+  if (scbKey && bolagsdataKey && typesafeKey && starka < MIN_STARKA_EFTER_SCB && sourceProfile.business_description) {
+    try {
+      logg.starka_fore_beskrivning = starka;
+      const orden = await pickPurposeKeywords(sourceProfile, typesafeKey, 3);
+      logg.beskrivningsord = orden;
+      if (orden.length) {
+        const ord = orden.join(", ");
+        const lan = options.geografi_relevant ? ticSource.county ?? source.lan : null;
+        const svarLista = await Promise.all(
+          orden.map((q) =>
+            bolagsdataGet(`/search?${new URLSearchParams({ q, status: "Aktivt", limit: "100", ...(lan ? { lan: bolagsdataLan(lan) } : {}) })}`, bolagsdataKey)
+          )
+        );
+        // Bolag som träffas av flera ord först, sedan bästa placering.
+        const traff = new Map<string, { h: any; n: number; plats: number }>();
+        svarLista.forEach((d: any) =>
+          (d.hits || []).forEach((h: any, plats: number) => {
+            const org = normOrgNr(h.org_nr);
+            if (org.length !== 10 || seen.has(org) || excludeOrgNrs.has(org)) return;
+            const t = traff.get(org) || { h, n: 0, plats };
+            t.n++;
+            t.plats = Math.min(t.plats, plats);
+            traff.set(org, t);
+          })
+        );
+        const hits = [...traff.values()].sort((a, b) => b.n - a.n || a.plats - b.plats).map((t) => t.h);
+        logg.beskrivning_traffar = hits.length;
+        // Sökordningen (bäst textträff först) avgör vilka som får detaljanrop.
+        const detaljer = await mapLimit(hits.slice(0, BESKRIVNING_KANDIDATER), 5, async (h) => {
+          try {
+            return await bolagsdataDetails(normOrgNr(h.org_nr), bolagsdataKey, h, "");
+          } catch (e) {
+            if (arKvotSlut(e)) throw e;
+            return null;
+          }
+        });
+        const pool: { company: Twin; profile: TicProfile }[] = [];
+        for (const d of detaljer) {
+          if (!d?.company || !d.ticSource || seen.has(d.company.org_nr)) continue;
+          seen.add(d.company.org_nr);
+          const company: Twin = { ...d.company, matchning: null, verksamhet: d.ticSource.profile.business_description };
+          koncernInfo.set(company, { name: company.name, address: company.ort ?? null, website: d.ticSource.profile.website, owned_through: [] });
+          pool.push({ company, profile: d.ticSource.profile });
+        }
+        await judgePool(pool);
+        if (pool.length) urvalDelar.push(`verksamhet med "${ord}"`);
+      }
+    } catch (e: any) {
+      if (arKvotSlut(e)) throw e;
+      logg.beskrivning_fel = String(e.message || e);
+    }
+  }
+
+  } catch (e) {
+    // bolagsdataapi:s dygnskvot tog slut: visa SCB:s närmaste bolag i branschen,
+    // obedömda (verksamhetsbeskrivningarna kunde inte hämtas), i stället för inget.
+    if (!arKvotSlut(e) || !scbReserv.length) throw e;
+    kvotSlut = true;
+    logg.kvot_slut = true;
+    const valda = scbReserv.filter((f) => !seen.has(f.orgNr)).slice(0, Math.max(0, MAX_TWINS_PER_LEAD - twins.length));
+    // Branschlistan saknar telefon och e-post - de finns i SCB:s bolagspost (gratis).
+    const fulla = await mapLimit(valda, 5, (f) => scbForetag(f.orgNr, scbKey!).catch(() => null));
+    for (const [i, lista] of valda.entries()) {
+      const f = fulla[i] ?? lista;
+      seen.add(f.orgNr);
+      twins.push({
+        org_nr: f.orgNr,
+        name: f.namn,
+        sni_codes: f.sni ? [f.sni] : [],
+        ort: f.postOrt,
+        matchning: null,
+        verksamhet: null,
+        likhet: "ej bedömd – samma bransch",
+        poang: 0,
+        kontakt: { beslutsfattare: null, epost: f.epost, telefon: f.telefon, webb: null },
+      });
+    }
+    urvalDelar.push("SCB: samma bransch, ej bedömda (dagens anrop till bolagsdataapi slut)");
+    urvalKod = "storlek";
+  }
+
+  // --- Steg 4: tic.io (200/mån) - bara om inget av ovan räckte -------------
+  // Med SCB: bara vid färre än 3 starka tvillingar. Utan SCB som förut.
   let medNyckelord = false;
-  if (!typesafeKey || starka < MIN_STARKA_TVILLINGAR) {
+  if (!kvotSlut && (!typesafeKey || starka < (scbKey ? MIN_STARKA_EFTER_SCB : MIN_STARKA_TVILLINGAR))) {
     try {
       await ticPhases();
     } catch (e: any) {
@@ -1117,7 +1301,7 @@ export async function findTwins(
       urvalDelar.push("tic.io-taket nått");
     }
   } else {
-    logg.tic = "hoppades över (tillräckligt många starka tvillingar från bolagsdataapi)";
+    logg.tic = kvotSlut ? "hoppades över (bolagsdataapi:s dygnskvot slut)" : "hoppades över (tillräckligt många starka tvillingar)";
   }
 
   async function ticPhases() {
@@ -1329,6 +1513,14 @@ const BOLAGSDATA_NAMN_MAX = 150;
 const normOrt = (s: string) => s.trim().toUpperCase();
 // Så många namnträffar får detaljanrop (verksamhetsbeskrivning + SNI) och Jev-bedömning.
 const BOLAGSDATA_DETALJ_MAX = 25;
+// SCB-steget: så många av branschens bolag (närmast i storlek) får detaljanrop.
+const SCB_KANDIDATER = 25;
+const SCB_KANDIDATER_LOKAL = 15;
+// ... valda bland så många närmast i storlek, med Jevs namnsållning.
+const SCB_FORURVAL = 300;
+// Färre starka tvillingar än så efter SCB: sök även i verksamhetsbeskrivningar.
+const MIN_STARKA_EFTER_SCB = 3;
+const BESKRIVNING_KANDIDATER = 25;
 // Lokala bolag: så många detaljanrop först, resten bara om det inte räckte.
 const BOLAGSDATA_DETALJ_LOKAL = 15;
 type KandidatPool = { company: Twin; profile: TicProfile; koncern: KoncernInfo }[];

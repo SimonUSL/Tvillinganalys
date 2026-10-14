@@ -81,6 +81,7 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `WEBFLOW_WEBHOOK_SECRET` | Webhookens "secret key" från Webflow (64 tecken). Appen kontrollerar Webflows signatur (`x-webflow-signature`) med den; alternativt godtas samma värde som `?nyckel=` i URL:en. Saknas den tas inga webhooks emot. |
 | `RESEND_API_KEY` | Nyckel till Resend för automatiska mejl. |
 | `MAIL_FROM` | Avsändare, t.ex. `Tvillinganalys <tvillingar@upstrategylab.com>` (domänen verifierad i Resend). |
+| `SCB_API_KEY` | SCB:s företagsregister (gratis nyckel via registreraafr.scb.se). Utan den används inte SCB-steget. |
 | `MAIL_TO` | Grundinställning för mottagarna, kommaseparerade. Gäller bara tills listan sparats under *Inställningar* i adminvyn. |
 | `APP_URL` | Valfri. Länken i mejlen (standard https://tvillinganalys.vercel.app). |
 
@@ -119,6 +120,14 @@ Båda registren skickar kvoten i svarshuvudena (`x-ratelimit-remaining`, `-limit
 - **tic.io** (200 per period): varje sökning loggar `"steg":"tic-kvot"`; saknas huvudena loggas vilka rate-limit-huvuden som fanns. Körningens tak blir aldrig högre än det som är kvar.
 - **bolagsdataapi** (500 per dygn, fylls på vid midnatt svensk tid): ett nytt bolag använder upp till ca 35 anrop (`BD_PER_BOLAG`), sparade svar inget. En manuell körning startar inte ett nytt bolag om det skulle ta av de 60 anrop per dygn som sparas åt förfrågningarna från webbplatsen (`BD_RESERV`); de bolagen får status "kör igen i morgon". Tar kvoten slut mitt i ett bolag (`BolagsdataSlut`, även vid svar 429) stoppas bolaget i stället för att falla tillbaka på tic.io. Automatiska förfrågningar hamnar då i Granska med orsaken "Dagens sökningar … tog slut".
 - **Färre anrop för lokala bolag**: 15 kandidater får detaljanrop först; bara om det ger färre än 10 starka tvillingar hämtas resten (upp till 25) innan tic.io används. Testat 2026-10-13 på fyra lokala bolag: lika många direkta konkurrenter, 24–25 anrop i stället för 35 när 15 räckte.
+- **Sökordningen** (`findTwins`), billigast först:
+  1. **SCB** (`lib/scb.ts`, `SCB_API_KEY`, gratis, ingen kvot): alla aktiva bolag med källbolagets huvudbransch enligt SCB (5 000 per anrop). Lokala bolag: samma län och närmaste orter först. Sedan närmast i storlek (omsättnings- eller anställdaklass) och Jevs namnsållning bland de 300 närmaste. 15 (lokala) eller 25 kandidater får verksamhetsbeskrivning från bolagsdataapi och bedöms av Jev.
+  2. **bolagsdataapi, namnsökning** (branschordet i namnet): om SCB gav färre än 10 starka tvillingar. Hittar rätt bolag även när branschkoden är fel.
+  3. **Sökning i verksamhetsbeskrivningar** (de tre ord Jev tycker bäst beskriver verksamheten, hos bolagsdataapi): om det fortfarande finns färre än 3 starka.
+  4. **tic.io**: bara om det fortfarande finns färre än 3 starka (utan SCB-nyckel: färre än 10, som förut).
+  - Tar bolagsdataapi:s dygnskvot slut mitt i sökningen visas SCB:s närmaste bolag i branschen, med telefon och e-post från SCB, märkta "ej bedömd – samma bransch" (verksamhetsbeskrivningarna kunde inte hämtas).
+  - Testat 2026-10-13/14 utan tic.io: SkiStar och Branäs 10 direkta konkurrenter (6 av SkiStars samma som tic.io gav); fyra lokala bolag 39 av 40 direkta med ca 16 anrop till bolagsdataapi per bolag (förut 35). Bolag med missvisande branschkod (ett kyllager registrerat som bageri) får fortfarande inga tvillingar; Granska är rätt väg för dem.
+  - SCB filtrerar på ett villkor i taget och använder i vissa branscher SNI 2025-koder; därför används källbolagets egen kod hos SCB. Reklamspärr (SCB) används inte, se beslut 2026-10-13.
 - **Testat och inte infört (2026-10-13)**: sökning i verksamhetsbeskrivningar hos bolagsdataapi i stället för tic.io:s nyckelordssökning. Lika bra för lokala bolag (som inte använder tic.io ändå), sämre för rikstäckande nischbolag (SkiStar). Branschkodssökningen hos SCB är tänkt att ersätta tic.io där.
 
 ## Cache mellan körningar — `lib/cache.ts`

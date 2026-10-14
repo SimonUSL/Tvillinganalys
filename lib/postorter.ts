@@ -29,8 +29,8 @@ export const kommunForPostort = (ort: string | null | undefined): string | null 
 
 export const postorterIKommun = (kommun: string): string[] => PER_KOMMUN[kommun] || [kommun];
 
-// "Lerum" → "Lerums kommun", "Borås" → "Borås kommun"
-export const kommunNamn = (kommun: string) => `${kommun}${/[sxz]$/i.test(kommun) ? "" : "s"} kommun`;
+// "Lerum" → "Lerums kommun", "Borås" → "Borås kommun", "Uppsala" → "Uppsala kommun"
+export const kommunNamn = (kommun: string) => `${kommun}${/[aeiouyåäösxz]$/i.test(kommun) ? "" : "s"} kommun`;
 
 // Orterna att söka för ett lokalt bolag: bolagets egen postort, sedan alla
 // postorter i dess kommun och i kommuner som förfrågan nämner - varannan från
