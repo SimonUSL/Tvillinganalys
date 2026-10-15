@@ -100,6 +100,7 @@ export async function scbForetag(orgNr: string, nyckel: string): Promise<ScbFore
 // nästa bolag i samma bransch slipper hämta den igen.
 const BRANSCH_DAGAR = 180;
 const BRANSCH_HELA_MAX = 6000; // större branscher sparas bara per län (Redis-värden < 1 MB)
+const LAN_KODER = ["01", "03", "04", "05", "06", "07", "08", "09", "10", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23", "24", "25"];
 type Kort = [string, string, string, string, string | null, number, string | null];
 const tillKort = (f: ScbForetag): Kort => [f.orgNr, f.namn, f.kommunKod, f.lanKod, f.postOrt, f.anstKl, f.sni];
 const franKort = ([orgNr, namn, kommunKod, lanKod, postOrt, anstKl, sni]: Kort): ScbForetag => ({
@@ -114,6 +115,13 @@ export async function scbBransch(
   const del = lanKod || "alla";
   const sparad = await cacheGet<{ kort: Kort[]; kapad: boolean }>(`scb:br:${sni}:${del}`);
   if (sparad) return { foretag: sparad.kort.map(franKort), kapad: sparad.kapad, anrop: 0, sparad: true };
+  // Hela landet i en stor bransch sparas bara per län: slå ihop de 21 delarna.
+  if (!lanKod) {
+    const delar = await Promise.all(LAN_KODER.map((l) => cacheGet<{ kort: Kort[]; kapad: boolean }>(`scb:br:${sni}:${l}`)));
+    if (delar.every(Boolean)) {
+      return { foretag: delar.flatMap((d) => d!.kort.map(franKort)), kapad: delar.some((d) => d!.kapad), anrop: 0, sparad: true };
+    }
+  }
 
   const ut: ScbForetag[] = [];
   let cursor: number | null = null;
@@ -136,8 +144,7 @@ export async function scbBransch(
   // Spara per län (alla 21 på en gång) och hela branschen om den är liten.
   const perLan = new Map<string, Kort[]>();
   for (const f of ut) perLan.set(f.lanKod, [...(perLan.get(f.lanKod) || []), tillKort(f)]);
-  const lanKoder = ["01", "03", "04", "05", "06", "07", "08", "09", "10", "12", "13", "14", "17", "18", "19", "20", "21", "22", "23", "24", "25"];
-  await Promise.all(lanKoder.map((l) => cacheSet(`scb:br:${sni}:${l}`, { kort: perLan.get(l) || [], kapad }, BRANSCH_DAGAR)));
+  await Promise.all(LAN_KODER.map((l) => cacheSet(`scb:br:${sni}:${l}`, { kort: perLan.get(l) || [], kapad }, BRANSCH_DAGAR)));
   if (ut.length <= BRANSCH_HELA_MAX) await cacheSet(`scb:br:${sni}:alla`, { kort: ut.map(tillKort), kapad }, BRANSCH_DAGAR);
 
   return { foretag: lanKod ? ut.filter((f) => f.lanKod === lanKod) : ut, kapad, anrop };
