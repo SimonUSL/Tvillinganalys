@@ -1114,8 +1114,24 @@ export async function findTwins(
   let nisch = false;
   const season = options.sasongseffekt;
 
+  // Tid per steg (ms), loggas som "steg":"tider".
+  const tider: Record<string, number> = {};
+  const matt = (namn: string) => {
+    const t0 = Date.now();
+    return () => void (tider[namn] = (tider[namn] || 0) + Date.now() - t0);
+  };
+  const tidStart = Date.now();
+
   const judgePool = async (pool: { company: Twin; profile: TicProfile }[]) => {
     if (!typesafeKey) return;
+    const klar = matt("jev_bedomning");
+    try {
+      await judgePoolInne(pool);
+    } finally {
+      klar();
+    }
+  };
+  const judgePoolInne = async (pool: { company: Twin; profile: TicProfile }[]) => {
     kandidater += pool.length;
     const judged = await mapLimit(pool, JEV_CONCURRENCY, async ({ company, profile }) => {
       try {
@@ -1173,15 +1189,17 @@ export async function findTwins(
     try {
       const egen = await scbForetag(sourceOrgNr, scbKey);
       const koder = [...new Set([egen?.sni, ...(source.sni_codes || [])].filter(Boolean) as string[])];
-      let bransch: { foretag: ScbForetag[]; kapad: boolean; anrop: number } = { foretag: [], kapad: false, anrop: 0 };
-      for (const kod of koder) {
-        bransch = await scbBransch(kod, scbKey);
-        logg.scb_bransch = { kod, bolag: bransch.foretag.length, kapad: bransch.kapad, anrop: bransch.anrop };
-        if (bransch.foretag.length) break;
-      }
       // Länet från SCB:s post, annars från bolagsdataapi (om SCB inte svarade).
       const egetLan = egen?.lanKod || (ticSource.countyCode != null ? String(ticSource.countyCode).padStart(2, "0") : null);
       const lokal = options.geografi_relevant && egetLan;
+      let bransch: { foretag: ScbForetag[]; kapad: boolean; anrop: number; sparad?: boolean } = { foretag: [], kapad: false, anrop: 0 };
+      for (const kod of koder) {
+        const klar = matt("scb_bransch");
+        bransch = await scbBransch(kod, scbKey, lokal ? egetLan : null);
+        klar();
+        logg.scb_bransch = { kod, bolag: bransch.foretag.length, kapad: bransch.kapad, anrop: bransch.anrop, sparad: !!bransch.sparad };
+        if (bransch.foretag.length) break;
+      }
       // Storleksavstånd i klasser: omsättningsklass i första hand, annars anställda.
       const avstand = (f: ScbForetag) =>
         egen?.omsKl != null && f.omsKl != null ? Math.abs(f.omsKl - egen.omsKl) : egen ? Math.abs(f.anstKl - egen.anstKl) : 0;
@@ -1194,6 +1212,7 @@ export async function findTwins(
         .slice(0, SCB_FORURVAL);
       // Stora branscher har hundratals lika stora bolag: Jev sållar på namnen
       // (gratis) så att detaljanropen går till de mest lovande.
+      const namnKlar = matt("scb_namnsallning");
       if (urvalScb.length > SCB_KANDIDATER) {
         const svar = await fetch(TYPESAFE_URL, {
           method: "POST",
@@ -1219,7 +1238,9 @@ export async function findTwins(
       scbReserv = urvalScb.slice(0, MAX_TWINS_PER_LEAD * 2);
       urvalScb.splice(options.geografi_relevant ? SCB_KANDIDATER_LOKAL : SCB_KANDIDATER);
       logg.scb = { kandidater: urvalScb.length, reklamsparr: urvalScb.filter((f) => f.reklamSparr).length };
-      const detaljer = await mapLimit(urvalScb, 5, async (f) => {
+      namnKlar();
+      const beskrKlar = matt("scb_beskrivningar");
+      const detaljer = await mapLimit(urvalScb, BESKRIVNING_SAMTIDIGT, async (f) => {
         try {
           return { f, d: await kandidatDetaljer(f.orgNr, bolagsdataKey, { org_nr: f.orgNr, name: f.namn, postal_town: f.postOrt }) };
         } catch (e) {
@@ -1227,6 +1248,7 @@ export async function findTwins(
           return null;
         }
       });
+      beskrKlar();
       const pool: { company: Twin; profile: TicProfile }[] = [];
       for (const x of detaljer) {
         if (!x?.d.company || !x.d.ticSource || seen.has(x.d.company.org_nr)) continue;
@@ -1252,7 +1274,9 @@ export async function findTwins(
   // Bara om SCB inte redan gav tillräckligt många starka tvillingar.
   if (bolagsdataKey && typesafeKey && starka < MIN_STARKA_TVILLINGAR) {
     try {
+      const fas0Klar = matt("namnsokning_hamta");
       const fas0 = await bolagsdataCandidates(source, ticSource, options, bolagsdataKey, typesafeKey, seen, excludeOrgNrs);
+      fas0Klar();
       logg.bolagsdata = fas0.logg;
       for (const { company, profile, koncern } of fas0.pool) koncernInfo.set(company, koncern);
       await judgePool(fas0.pool.map(({ company, profile }) => ({ company, profile })));
@@ -1554,6 +1578,7 @@ export async function findTwins(
   }
 
   logg.tic_anrop = tic.anrop - anropFore;
+  tider.sokning_totalt = Date.now() - tidStart;
   console.log(JSON.stringify({ ...logg, kandidater, bortsorterade: bort, starka, kvar: twins.length }));
   const urval = urvalDelar.join("; ") || "inga kandidater";
   // Poäng inom samma 0,05-steg räknas som lika (skillnaderna där är brus i
@@ -1567,11 +1592,18 @@ export async function findTwins(
   logg.nara_orter = [...naraOrter];
   const urvalOrter = antalNara ? (options.orter || []).filter((o) => twins.some((t) => nara(t) && normOrt(t.ort!) === normOrt(o))) : [];
   if (!typesafeKey) return { urval, urval_kod: urvalKod, urval_orter: urvalOrter, tic_tak: ticTak, twins: twins.slice(0, MAX_TWINS_PER_LEAD) };
+  const koncernKlar = matt("koncernkontroll");
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
+  koncernKlar();
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
   const slutliga = kvar.slice(0, MAX_TWINS_PER_LEAD);
+  const detaljKlar = matt("tvillingdetaljer");
   if (bolagsdataKey) await fyllDetaljer(slutliga, bolagsdataKey);
+  detaljKlar();
+  const kontaktKlar = matt("beslutsfattare");
   await fyllKontakter(slutliga, tic);
+  kontaktKlar();
+  console.log(JSON.stringify({ steg: "tider", kallbolag: source.name, ms: { ...tider, totalt: Date.now() - tidStart } }));
   return { urval, urval_kod: urvalKod, urval_orter: urvalOrter, tic_tak: ticTak, twins: slutliga };
 }
 
@@ -1588,6 +1620,8 @@ const BOLAGSDATA_DETALJ_MAX = 25;
 // SCB-steget: så många av branschens bolag (närmast i storlek) får detaljanrop.
 const SCB_KANDIDATER = 25;
 const SCB_KANDIDATER_LOKAL = 15;
+// Så många verksamhetsbeskrivningar hämtas samtidigt.
+const BESKRIVNING_SAMTIDIGT = 10;
 // ... valda bland så många närmast i storlek, med Jevs namnsållning.
 const SCB_FORURVAL = 300;
 // Färre starka tvillingar än så efter SCB: sök även i verksamhetsbeskrivningar.

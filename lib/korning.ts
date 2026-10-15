@@ -110,6 +110,7 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
   const { tic, bolagsdataKey, typesafeKey, foretagskontaktKey, knownCustomerOrgNrs } = ctx;
   const bas = { ...lead.extra, lead_foretagsnamn: lead.namn };
 
+  const t0 = Date.now();
   let res: SourceResult;
   try {
     res = lead.resolved ?? (await resolveSourceCompany(lead.namn, tic, bolagsdataKey, typesafeKey, lead.orgNr || undefined));
@@ -184,6 +185,8 @@ export async function processLead(lead: LeadIn, ctx: Ctx): Promise<ResultRow[]> 
     options.orter = n.orter;
     naraKommuner = n.kommuner;
   }
+
+  console.log(JSON.stringify({ steg: "tider_kallbolag", kallbolag: source.name, ms: Date.now() - t0 }));
 
   const gemensam = {
     ...gemensamGrund,

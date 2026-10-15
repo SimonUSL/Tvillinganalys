@@ -13,6 +13,8 @@ export type { ResultRow } from "@/lib/korning";
 export const maxDuration = 300;
 // tic.io tar bara emot anrop från Norden/Tyskland - kör alltid i Stockholm.
 export const preferredRegion = "arn1";
+// Så många bolag i en körning söks samtidigt.
+const SAMTIDIGA = 3;
 
 // Ett granskat lead som gränssnittet skickar.
 interface GranskatLead {
@@ -79,25 +81,30 @@ export async function POST(req: NextRequest) {
     // --- Granskade leads (formulärexporter eller CSV) från gränssnittet.
     const leads = (body.leads as GranskatLead[]).filter((l) => (l.namn || "").trim() || (l.org_nr || "").trim());
     const kor = async (skicka: (h: Handelse) => void) => {
-      for (let i = 0; i < leads.length; i++) {
+      // SAMTIDIGA bolag åt gången: varje bolag väntar mest på andra tjänster
+      // (SCB, Bolagsverket, Jev), så tre parallellt går ungefär tre gånger så fort.
+      const enLead = async (i: number) => {
         const lead = leads[i];
         const namn = (lead.namn || "").trim();
         const orgNr = (lead.org_nr || "").replace(/\D/g, "");
         skicka({ typ: "lead", index: i, totalt: leads.length, namn: namn || orgNr, lead_id: lead.extra?.lead_id });
         let rader: ResultRow[];
-        // Ett bolag med flera förfrågningar tvillingsöks en gång.
+        // Ett bolag med flera förfrågningar tvillingsöks en gång. Markeras innan
+        // något väntas på, så att två parallella dubbletter inte båda söks.
         const nyckel = orgNr || namnUtanBolagsform(namn).toLowerCase();
+        const dublett = sedda.has(nyckel);
+        if (!dublett) sedda.add(nyckel);
         // Spärr: en manuell körning stannar innan den tar de anrop hos bolagsdataapi
         // som sparas åt förfrågningarna från webbplatsen (BD_RESERV).
-        const bdKvar = sedda.has(nyckel) ? null : await kvarNu("bolagsdata");
+        const bdKvar = dublett ? null : await kvarNu("bolagsdata");
         if (bdKvar !== null && bdKvar < BD_RESERV + BD_PER_BOLAG) {
+          sedda.delete(nyckel); // inte sökt - får sökas i morgon
           rader = [kvotSlutRad({ ...lead.extra, lead_foretagsnamn: namn || orgNr })];
-        } else if (sedda.has(nyckel)) {
+        } else if (dublett) {
           rader = [
             { ...lead.extra, lead_foretagsnamn: namn || orgNr, status_kod: "dublett", status: "dublett: samma bolag finns tidigare i listan" },
           ];
         } else {
-          sedda.add(nyckel);
           rader = await processLead(
             { namn: namn || orgNr, orgNr, geo: lead.geo, sasong: lead.sasong, strikt: lead.strikt, kommun: lead.kommun, extra: lead.extra },
             ctx
@@ -105,7 +112,13 @@ export async function POST(req: NextRequest) {
           await efterLead(rader);
         }
         skicka({ typ: "rader", rows: rader });
-      }
+      };
+      let nasta = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(SAMTIDIGA, leads.length) }, async () => {
+          while (nasta < leads.length) await enLead(nasta++);
+        })
+      );
       const klar = { typ: "klar" as const, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar, sokta: [...sedda] };
       console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, ...klar }));
       skicka(klar);

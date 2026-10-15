@@ -11,9 +11,9 @@ import Sidhuvud from "./Sidhuvud";
 import type { Kalla, Korning, Rad, Steg } from "./typer";
 import { GRANSKA_ORSAK, forfraganEtikett } from "./klartext";
 
-// Så många bolag per anrop till servern (se kor()): ett nytt bolag tar 10-60 s
-// och en körning får hålla på i högst 5 minuter.
-const OMGANG = 3;
+// Så många bolag per anrop till servern (se kor()): ett nytt bolag tar 10-60 s,
+// servern söker 3 åt gången och en körning får hålla på i högst 5 minuter.
+const OMGANG = 6;
 
 const STEG: { id: Steg; text: string }[] = [
   { id: "underlag", text: "Underlag" },
