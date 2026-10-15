@@ -1,6 +1,7 @@
 import { cacheGet, cacheNyckel, cacheSet } from "./cache";
 import { kvarIMinnet, kvotFranSvar, sparaKvot } from "./kvot";
 import { ScbForetag, scbBransch, scbForetag } from "./scb";
+import { BolagsverketUpptaget, BvOrganisation, bolagsverketPa, bvOrganisation } from "./bolagsverket";
 import { Kontakt, kontaktFranBolagsdata, kontaktFranTic, slaIhop } from "./kontakt";
 
 // twinfinder.ts — portning av twin_finder.py:s sök-logik till webb-appen.
@@ -454,6 +455,71 @@ const KONTEXT_DETALJER = 5;
 
 // Detaljanropet ger verksamhetsbeskrivning, län och SNI-koder. Storlek finns
 // bara i sökträffen (hit), så vid uppslag på org.nr saknas den.
+// En kandidats verksamhetsbeskrivning: från Bolagsverket (ingen dygnskvot) om
+// nycklarna finns, annars från bolagsdataapi. Bolag som inte är verksamma hoppas över.
+async function kandidatDetaljer(orgNr: string, bolagsdataKey: string, hit: any): Promise<SourceResult> {
+  if (bolagsverketPa()) {
+    try {
+      // Väntar inte: är minutens anrop slut tar bolagsdataapi över.
+      const bv = await bvOrganisation(orgNr, true);
+      if (bv?.verksam === false) return { company: null, matchning: "ej verksam" };
+      if (bv?.beskrivning) return franBolagsverket(bv, hit);
+    } catch (e: any) {
+      if (!(e instanceof BolagsverketUpptaget)) console.log(JSON.stringify({ steg: "bolagsverket", fel: String(e.message || e) }));
+    }
+  }
+  return bolagsdataDetails(orgNr, bolagsdataKey, hit, "");
+}
+
+function franBolagsverket(bv: BvOrganisation, hit: any): SourceResult {
+  const company: Twin = {
+    org_nr: bv.orgNr,
+    name: bv.namn || hit?.name || "",
+    net_revenue: hit?.net_revenue || null,
+    employees: hit?.employees ?? null,
+    sni_codes: bv.sni,
+    lan: null,
+    ort: bv.postort ?? hit?.postal_town ?? null,
+    matchning: "",
+    behover_detaljer: true,
+  };
+  const ticSource: TicSource = {
+    profile: {
+      name: company.name,
+      business_description: (bv.beskrivning || "").slice(0, 600) || null,
+      industry: [],
+      legal_form: hit?.legal_form_text ?? null,
+      employees: company.employees ?? null,
+      website: null,
+      municipality: company.ort ?? null,
+      owned_through: [],
+    },
+    sni2007: new Set(bv.sni),
+    sni2025: new Set(),
+    county: null,
+    countyCode: null,
+  };
+  return { company, matchning: "", ticSource };
+}
+
+// Tvillingar vars beskrivning kom från Bolagsverket får län och kontaktuppgifter
+// från bolagsdataapi - ett anrop per tvilling, bara för de som visas.
+async function fyllDetaljer(twins: Twin[], bolagsdataKey: string): Promise<void> {
+  await mapLimit(twins.filter((t) => t.behover_detaljer), 5, async (t) => {
+    try {
+      const d = await bolagsdataDetails(t.org_nr, bolagsdataKey, null, "");
+      if (d.company) {
+        t.lan = t.lan ?? d.company.lan ?? null;
+        t.ort = t.ort ?? d.company.ort ?? null;
+        t.kontakt = d.company.kontakt;
+      }
+      t.behover_detaljer = false;
+    } catch {
+      // Kvoten slut eller fel: tvillingen visas ändå, utan län och kontakt från registret.
+    }
+  });
+}
+
 export async function bolagsdataDetails(
   orgNr: string,
   bolagsdataKey: string,
@@ -550,6 +616,9 @@ export interface Twin extends Company {
   verksamhet?: string | null;
   likhet?: string | null;
   poang?: number | null;
+  // Hämtad från Bolagsverket (bara beskrivning och SNI): län och kontakt
+  // fylls på från bolagsdataapi om den blir tvilling (fyllDetaljer).
+  behover_detaljer?: boolean;
 }
 
 export interface TicProfile {
@@ -1110,14 +1179,16 @@ export async function findTwins(
         logg.scb_bransch = { kod, bolag: bransch.foretag.length, kapad: bransch.kapad, anrop: bransch.anrop };
         if (bransch.foretag.length) break;
       }
-      const lokal = options.geografi_relevant && egen?.lanKod;
+      // Länet från SCB:s post, annars från bolagsdataapi (om SCB inte svarade).
+      const egetLan = egen?.lanKod || (ticSource.countyCode != null ? String(ticSource.countyCode).padStart(2, "0") : null);
+      const lokal = options.geografi_relevant && egetLan;
       // Storleksavstånd i klasser: omsättningsklass i första hand, annars anställda.
       const avstand = (f: ScbForetag) =>
         egen?.omsKl != null && f.omsKl != null ? Math.abs(f.omsKl - egen.omsKl) : egen ? Math.abs(f.anstKl - egen.anstKl) : 0;
       const naraOrt = (f: ScbForetag) => (f.postOrt && naraOrter.has(normOrt(f.postOrt)) ? 1 : 0);
       const urvalScb: ScbForetag[] = bransch.foretag
         .filter((f) => !seen.has(f.orgNr) && !excludeOrgNrs.has(f.orgNr))
-        .filter((f) => !lokal || f.lanKod === egen!.lanKod)
+        .filter((f) => !lokal || f.lanKod === egetLan)
         .filter((f) => !options.storlek_strikt || avstand(f) <= 1)
         .sort((a, b) => naraOrt(b) - naraOrt(a) || avstand(a) - avstand(b))
         .slice(0, SCB_FORURVAL);
@@ -1150,7 +1221,7 @@ export async function findTwins(
       logg.scb = { kandidater: urvalScb.length, reklamsparr: urvalScb.filter((f) => f.reklamSparr).length };
       const detaljer = await mapLimit(urvalScb, 5, async (f) => {
         try {
-          return { f, d: await bolagsdataDetails(f.orgNr, bolagsdataKey, { org_nr: f.orgNr, name: f.namn, postal_town: f.postOrt }, "") };
+          return { f, d: await kandidatDetaljer(f.orgNr, bolagsdataKey, { org_nr: f.orgNr, name: f.namn, postal_town: f.postOrt }) };
         } catch (e) {
           if (arKvotSlut(e)) throw e;
           return null;
@@ -1237,7 +1308,7 @@ export async function findTwins(
         // Sökordningen (bäst textträff först) avgör vilka som får detaljanrop.
         const detaljer = await mapLimit(hits.slice(0, BESKRIVNING_KANDIDATER), 5, async (h) => {
           try {
-            return await bolagsdataDetails(normOrgNr(h.org_nr), bolagsdataKey, h, "");
+            return await kandidatDetaljer(normOrgNr(h.org_nr), bolagsdataKey, h);
           } catch (e) {
             if (arKvotSlut(e)) throw e;
             return null;
@@ -1499,6 +1570,7 @@ export async function findTwins(
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
   const slutliga = kvar.slice(0, MAX_TWINS_PER_LEAD);
+  if (bolagsdataKey) await fyllDetaljer(slutliga, bolagsdataKey);
   await fyllKontakter(slutliga, tic);
   return { urval, urval_kod: urvalKod, urval_orter: urvalOrter, tic_tak: ticTak, twins: slutliga };
 }
@@ -1674,7 +1746,7 @@ async function bolagsdataCandidates(
   async function hamtaDetaljer(urval: { h: any }[]) {
   const detaljer = await mapLimit(urval, 5, async ({ h }) => {
     try {
-      return await bolagsdataDetails(normOrgNr(h.org_nr), bolagsdataKey, h, "");
+      return await kandidatDetaljer(normOrgNr(h.org_nr), bolagsdataKey, h);
     } catch (e) {
       if (arKvotSlut(e)) throw e;
       return null;

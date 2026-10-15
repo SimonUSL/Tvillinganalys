@@ -81,6 +81,7 @@ middleware.ts          — skyddar appen bakom /login om SITE_PASSWORD är satt
 | `WEBFLOW_WEBHOOK_SECRET` | Webhookens "secret key" från Webflow (64 tecken). Appen kontrollerar Webflows signatur (`x-webflow-signature`) med den; alternativt godtas samma värde som `?nyckel=` i URL:en. Saknas den tas inga webhooks emot. |
 | `RESEND_API_KEY` | Nyckel till Resend för automatiska mejl. |
 | `MAIL_FROM` | Avsändare, t.ex. `Tvillinganalys <tvillingar@upstrategylab.com>` (domänen verifierad i Resend). |
+| `BOLAGSVERKET_CLIENT_ID`, `BOLAGSVERKET_CLIENT_SECRET` | Bolagsverkets API för värdefulla datamängder (verksamhetsbeskrivningar). Utan dem hämtas beskrivningarna från bolagsdataapi. Kontot stängs efter 6 månader utan användning. |
 | `SCB_API_KEY` | SCB:s företagsregister (gratis nyckel via registreraafr.scb.se). Utan den används inte SCB-steget. |
 | `MAIL_TO` | Grundinställning för mottagarna, kommaseparerade. Gäller bara tills listan sparats under *Inställningar* i adminvyn. |
 | `APP_URL` | Valfri. Länken i mejlen (standard https://tvillinganalys.vercel.app). |
@@ -92,7 +93,7 @@ Lokalt: samma variabler i `.env.local` (ignoreras av git). `npx next dev` kör a
 | API | Kvot (observerad 2026-10-07) | Används till |
 |---|---|---|
 | tic.io LENS | **200 anrop/månad**, 120/min, max 20 olika IP per nyckel/månad | tvillingsökning |
-| bolagsdataapi.se | **500 anrop/dygn** (nollställs vid midnatt, gratis, högre gräns kan sökas) | uppslag av kallbolaget (2 per lead) och tvillingar i första hand (~25 per lead) |
+| bolagsdataapi.se | **2 500 anrop/dygn** (höjd från 500 i okt 2026, nollställs vid midnatt, gratis) | uppslag av kallbolaget (2 per lead) och tvillingar i första hand (~25 per lead) |
 | TypeSafe Jev | ingen praktisk gräns, ~0,03 kr per lead | alla bedömningar |
 
 tic.io-anrop per lead: **0 när bolagsdataapi räcker** (typiskt lokala hantverks- och tjänstebolag), annars ~1–3. Varje körning har ett tak (fältet "Max tic.io-anrop", förval 3 per lead); när taket nås får resterande leads bara tvillingar från bolagsdataapi. Körningen visar och loggar antalet tic.io-anrop.
@@ -118,8 +119,9 @@ Kolumnerna Matchning, Urval, Geografi, Säsong och Likhet visar varför varje va
 Båda registren skickar kvoten i svarshuvudena (`x-ratelimit-remaining`, `-limit`, ev. `-reset`). Senaste värdet sparas i Redis (`tic:kvot`, `bd:kvot`) och visas i Granska-steget.
 
 - **tic.io** (200 per period): varje sökning loggar `"steg":"tic-kvot"`; saknas huvudena loggas vilka rate-limit-huvuden som fanns. Körningens tak blir aldrig högre än det som är kvar.
-- **bolagsdataapi** (500 per dygn, fylls på vid midnatt svensk tid): ett nytt bolag använder upp till ca 25 anrop (`BD_PER_BOLAG`; ca 16 i testet med SCB först), sparade svar inget. En manuell körning startar inte ett nytt bolag om det skulle ta av de 60 anrop per dygn som sparas åt förfrågningarna från webbplatsen (`BD_RESERV`); de bolagen får status "kör igen i morgon". Tar kvoten slut mitt i ett bolag (`BolagsdataSlut`, även vid svar 429) stoppas bolaget i stället för att falla tillbaka på tic.io. Automatiska förfrågningar hamnar då i Granska med orsaken "Dagens sökningar … tog slut".
+- **bolagsdataapi** (2 500 per dygn, fylls på vid midnatt svensk tid): ett nytt bolag använder upp till ca 25 anrop (`BD_PER_BOLAG`; ca 11–12 i testet med SCB och Bolagsverket), sparade svar inget. En manuell körning startar inte ett nytt bolag om det skulle ta av de 150 anrop per dygn som sparas åt förfrågningarna från webbplatsen (`BD_RESERV`); de bolagen får status "kör igen i morgon". Tar kvoten slut mitt i ett bolag (`BolagsdataSlut`, även vid svar 429) stoppas bolaget i stället för att falla tillbaka på tic.io. Automatiska förfrågningar hamnar då i Granska med orsaken "Dagens sökningar … tog slut".
 - **Färre anrop för lokala bolag**: 15 kandidater får detaljanrop först; bara om det ger färre än 10 starka tvillingar hämtas resten (upp till 25) innan tic.io används. Testat 2026-10-13 på fyra lokala bolag: lika många direkta konkurrenter, 24–25 anrop i stället för 35 när 15 räckte.
+- **Verksamhetsbeskrivningar från Bolagsverket** (`lib/bolagsverket.ts`, värdefulla datamängder, OAuth2 client credentials med `BOLAGSVERKET_CLIENT_ID`/`_SECRET`, gratis, ingen dygnskvot, 60 anrop/min): alla kandidaters beskrivningar hämtas härifrån (sparas 180 dagar). Är minutens anrop slut (55 per process) hämtas beskrivningen från bolagsdataapi i stället för att vänta. De 10 som blir tvillingar får län och kontaktuppgifter från bolagsdataapi (`fyllDetaljer`). Testat 2026-10-15: samma kvalitet (SkiStar 10 direkta, Rolling Mill Service 7), 11–12 anrop till bolagsdataapi per bolag.
 - **Sökordningen** (`findTwins`), billigast först:
   1. **SCB** (`lib/scb.ts`, `SCB_API_KEY`, gratis, ingen kvot): alla aktiva bolag med källbolagets huvudbransch enligt SCB (5 000 per anrop). Lokala bolag: samma län och närmaste orter först. Sedan närmast i storlek (omsättnings- eller anställdaklass) och Jevs namnsållning bland de 300 närmaste. 15 (lokala) eller 25 kandidater får verksamhetsbeskrivning från bolagsdataapi och bedöms av Jev.
   2. **bolagsdataapi, namnsökning** (branschordet i namnet): om SCB gav färre än 10 starka tvillingar. Hittar rätt bolag även när branschkoden är fel.

@@ -257,7 +257,7 @@ export const kvotGaller = (k: Kvot | null) => !!k && (!k.aterstalls || new Date(
 
 // Måste stämma med BD_PER_BOLAG och BD_RESERV i lib/kvot.ts.
 const BD_PER_BOLAG = 25;
-const BD_RESERV = 60;
+const BD_RESERV = 150;
 
 function KvotRad({ admin, tak, kvot, bdKvot, antal }: { admin: boolean; tak: number; kvot: Kvot | null; bdKvot: Kvot | null; antal: number }) {
   if (!antal) return null;

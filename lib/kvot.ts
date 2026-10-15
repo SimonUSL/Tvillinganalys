@@ -1,5 +1,5 @@
 // kvot.ts — hur många anrop som är kvar hos de två bolagsregistren:
-// tic.io (200 per period) och bolagsdataapi (500 per dygn, fylls på vid midnatt).
+// tic.io (200 per period) och bolagsdataapi (2 500 per dygn, fylls på vid midnatt).
 // Båda skickar kvoten i svarshuvudena (x-ratelimit-*); det senaste värdet
 // sparas i Redis så att verktyget kan visa det innan en körning.
 
@@ -19,7 +19,7 @@ export interface Kvot {
 export const BD_PER_BOLAG = 25;
 // Så många anrop per dygn sparas åt förfrågningarna från webbplatsen: en
 // manuell lista stannar innan den tar dem.
-export const BD_RESERV = 60;
+export const BD_RESERV = 150;
 
 const NYCKEL: Record<Register, string> = { tic: "tic:kvot", bolagsdata: "bd:kvot" };
 const minne: Partial<Record<Register, Kvot>> = ((globalThis as any).__kvoter ??= {});
