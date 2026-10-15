@@ -42,7 +42,7 @@ Mejl skickas via **Resend** från `MAIL_FROM` (en adress på en domän verifiera
 
 1. **Underlag** (`app/ui/Underlag.tsx`): dra in en leadlista, Excel eller CSV (`lib/leadlista.ts` läser den i webbläsaren med SheetJS). Mallen `public/mallar/leadlista-mall.xlsx` har kolumnerna Bolagsnamn, Org.nr, Lokalt bolag, Säsong, Samma storlek och Kommun, med rullistor (de 290 kommunerna ligger på ett dolt blad). Förklaringen `public/mallar/leadlista-forklaring.pdf` skrivs ut ur `docs/leadlista-forklaring.html` med Chrome (kommandot står i filen). CSV får ha komma eller semikolon. En ifylld kommun gör alltid urvalet lokalt och söks som bolagets egen kommun. Formulärexporter och datumval finns inte längre i gränssnittet (`/api/preview` används inte).
 2. **Granska** (`app/ui/Granska.tsx`): förfrågningarna i tre grupper — *Föreslås*, *Behöver bolag* (fyll i namn/org.nr eller godta Jevs osäkra förslag med ett klick) och *Hoppas över* (med orsak, går att ta med ändå). Åtgärdsfältet längst ned har taket för tic.io-anrop. Ovanför står hur många tic.io-sökningar listan använder som mest (3 per bolag) mot hur många som är kvar; körningens tak blir aldrig högre än det som är kvar. Inget har sökts i det här steget.
-3. **Tvillingar** (`app/ui/Resultat.tsx`): förloppet strömmas från `/api/run` (NDJSON, ett bolag i taget) och resultaten visas per bolag med varför det valdes, hur tvillingarna togs fram och tvillingtabellen. Sammanfattning och CSV-nedladdning överst.
+3. **Tvillingar** (`app/ui/Resultat.tsx`): listan skickas till `/api/run` i omgångar om 3 bolag (`OMGANG` i `app/ui/App.tsx`), eftersom en körning får hålla på i högst 5 minuter och ett nytt bolag tar 10–60 s. Taket för tic.io delas av alla omgångar, och servern skickar tillbaka vilka bolag som redan sökts (`sokta` → `redan_sokta`) så att dubbletter fångas även mellan omgångarna. Förloppet strömmas (NDJSON, ett bolag i taget) och resultaten visas per bolag med varför det valdes, hur tvillingarna togs fram och tvillingtabellen. Sammanfattning och CSV-nedladdning överst.
 
 Stilar och färger: `app/globals.css` (Optimals röd #EB5F62, Poppins).
 
@@ -171,7 +171,7 @@ Supportärendena i formulären (fel i order, inloggning, ändra tryckoriginal, b
 - tic.io:s filter släpper bara igenom bolag som har fältet: bolag utan omsättning hos tic.io kommer inte med i storleksfiltrerade sökningar.
 - tic.io:s nyckelordssökning kräver att alla ord matchar — därför ett enda ord. Ibland väljer Jev ett för allmänt ord (t.ex. "andel" för ett finansbolag) och nyckelordskandidaterna blir svaga.
 - bolagsdataapi returnerar ibland SNI 2025-koder; sökningen täcker båda systemen, men bolag som bara har den motsvarande 2007-koden kan missas.
-- Med många leads per körning kan Vercels tidsgräns (`maxDuration = 60` s) och tic.io:s 120 anrop/min bli begränsande.
+- Vercels tidsgräns är 5 minuter per anrop (`maxDuration = 300`); därför körs listor i omgångar om 3 bolag. Testat 2026-10-15: 12 bolag i 3 omgångar på ca 4 minuter, dubbletter fångades mellan omgångarna.
 - Företagskontakt-integrationen är obekräftad (API:t okänt) och misslyckas tyst; köpreglerna är testade med simulerade svar.
 
 ## Källor och licenser

@@ -29,7 +29,7 @@ interface GranskatLead {
 export type Handelse =
   | { typ: "lead"; index: number; totalt: number; namn: string; lead_id?: number }
   | { typ: "rader"; rows: ResultRow[] }
-  | { typ: "klar"; tic_anrop: number; tic_fran_cache: number }
+  | { typ: "klar"; tic_anrop: number; tic_fran_cache: number; sokta: string[] }
   | { typ: "fel"; error: string };
 
 export async function POST(req: NextRequest) {
@@ -60,7 +60,9 @@ export async function POST(req: NextRequest) {
     knownCustomerOrgNrs: new Set(body.known_customer_org_nrs || []),
   };
   const rowsOut: ResultRow[] = [];
-  const sedda = new Set<string>();
+  // Bolag som redan sökts i tidigare omgångar av samma lista (gränssnittet
+  // skickar listan i omgångar, se app/ui/App.tsx) räknas som dubbletter.
+  const sedda = new Set<string>(Array.isArray(body.redan_sokta) ? body.redan_sokta.map(String) : []);
   // "granska": körningen kommer från granskningskön och ska mejlas som de automatiska.
   const kalla: KorningsKalla = body.kalla === "granska" ? "granska" : "verktyg";
   // Varje leads resultat sparas i historiken; tvillingar som föreslagits förut märks.
@@ -104,7 +106,7 @@ export async function POST(req: NextRequest) {
         }
         skicka({ typ: "rader", rows: rader });
       }
-      const klar = { typ: "klar" as const, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar };
+      const klar = { typ: "klar" as const, tic_anrop: ctx.tic.anrop, tic_fran_cache: ctx.tic.cacheTraffar, sokta: [...sedda] };
       console.log(JSON.stringify({ steg: "körning klar", leads: sedda.size, ...klar }));
       skicka(klar);
     };

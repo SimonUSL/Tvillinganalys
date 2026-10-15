@@ -11,6 +11,10 @@ import Sidhuvud from "./Sidhuvud";
 import type { Kalla, Korning, Rad, Steg } from "./typer";
 import { GRANSKA_ORSAK, forfraganEtikett } from "./klartext";
 
+// Så många bolag per anrop till servern (se kor()): ett nytt bolag tar 10-60 s
+// och en körning får hålla på i högst 5 minuter.
+const OMGANG = 3;
+
 const STEG: { id: Steg; text: string }[] = [
   { id: "underlag", text: "Underlag" },
   { id: "granska", text: "Granska" },
@@ -117,72 +121,91 @@ export default function App({ admin = false, ko = false }: { admin?: boolean; ko
     setKorning({ status: "kor", index: 0, totalt: leads.length, aktuellt: "", rows: [], ticAnrop: 0, ticCache: 0 });
     setSteg("resultat");
     window.scrollTo({ top: 0 });
+    // Listan körs i omgångar om OMGANG bolag: en körning på servern får hålla på
+    // i högst 5 minuter, och ett nytt bolag tar 10-30 sekunder.
+    const tak = Math.min(admin && maxTic.trim() !== "" ? Number(maxTic) : standardTak, kvotGaller(kvot) ? kvot!.kvar : Infinity);
+    let ticAnvant = 0;
+    let ticCache = 0;
+    let sokta: string[] = [];
+    const tillLead = (r: Rad) => ({
+      namn: r.namn.trim(),
+      org_nr: r.org.trim(),
+      geo: r.geo,
+      sasong: r.sasong,
+      strikt: r.strikt,
+      kommun: r.kommun,
+      extra: {
+        lead_id: r.id,
+        ...(kalla === "export"
+          ? {
+              forfragan_datum: r.datum,
+              forfragan_formular: r.formular,
+              forfragan_doman: r.doman,
+              forfragan_typ: admin ? r.typ : forfraganEtikett(r.typ_kod, r.avsandare_kod),
+              forfragan_text: r.text,
+              forfragan_namn: r.avsandare_falt?.namn || null,
+              forfragan_epost: r.avsandare_falt?.epost || null,
+              forfragan_telefon: r.avsandare_falt?.telefon || null,
+            }
+          : {}),
+      },
+    });
     try {
-      const resp = await fetch("/api/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          stream: true,
-          // Från granskningskön: resultatet mejlas till säljarna som de automatiska.
-          kalla: ko ? "granska" : "verktyg",
-          // Kunden ser inte taket; standardtaket gäller då alltid.
-          // Aldrig fler än som finns kvar hos tic.io (sparade svar kostar inget).
-          max_tic_anrop: Math.min(admin && maxTic.trim() !== "" ? Number(maxTic) : standardTak, kvotGaller(kvot) ? kvot!.kvar : Infinity),
-          leads: leads.map((r) => ({
-            namn: r.namn.trim(),
-            org_nr: r.org.trim(),
-            geo: r.geo,
-            sasong: r.sasong,
-            strikt: r.strikt,
-            kommun: r.kommun,
-            extra: {
-              lead_id: r.id,
-              ...(kalla === "export"
-                ? {
-                    forfragan_datum: r.datum,
-                    forfragan_formular: r.formular,
-                    forfragan_doman: r.doman,
-                    forfragan_typ: admin ? r.typ : forfraganEtikett(r.typ_kod, r.avsandare_kod),
-                    forfragan_text: r.text,
-                    forfragan_namn: r.avsandare_falt?.namn || null,
-                    forfragan_epost: r.avsandare_falt?.epost || null,
-                    forfragan_telefon: r.avsandare_falt?.telefon || null,
-                  }
-                : {}),
-            },
-          })),
-        }),
-      });
-      if (!resp.ok || !resp.body) {
-        const data = await resp.json().catch(() => ({}));
-        throw new Error(data.error || `Servern svarade ${resp.status}`);
-      }
-      // NDJSON: en händelse per rad.
-      const reader = resp.body.getReader();
-      const dec = new TextDecoder();
-      let buffert = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffert += dec.decode(value, { stream: true });
-        const delar = buffert.split("\n");
-        buffert = delar.pop() || "";
-        for (const del of delar) {
-          if (!del.trim()) continue;
-          const h = JSON.parse(del) as Handelse;
-          allaRader.push(h);
-          setKorning((k) => {
-            if (!k) return k;
-            if (h.typ === "lead") return { ...k, index: h.index, totalt: h.totalt, aktuellt: h.namn };
-            if (h.typ === "rader") return { ...k, rows: [...k.rows, ...h.rows] };
-            if (h.typ === "klar") return { ...k, status: "klar", index: k.totalt, ticAnrop: h.tic_anrop, ticCache: h.tic_fran_cache };
-            return { ...k, status: "fel", fel: h.error };
-          });
+      for (let start = 0; start < leads.length; start += OMGANG) {
+        const omgang = leads.slice(start, start + OMGANG);
+        const resp = await fetch("/api/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            stream: true,
+            // Från granskningskön: resultatet mejlas till säljarna som de automatiska.
+            kalla: ko ? "granska" : "verktyg",
+            // Kunden ser inte taket; standardtaket gäller då alltid. Aldrig fler än
+            // som finns kvar hos tic.io, och taket delas av alla omgångar.
+            max_tic_anrop: Number.isFinite(tak) ? Math.max(0, tak - ticAnvant) : null,
+            redan_sokta: sokta,
+            leads: omgang.map(tillLead),
+          }),
+        });
+        if (!resp.ok || !resp.body) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || `Servern svarade ${resp.status}`);
         }
+        // NDJSON: en händelse per rad.
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buffert = "";
+        let omgangKlar = false;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffert += dec.decode(value, { stream: true });
+          const delar = buffert.split("\n");
+          buffert = delar.pop() || "";
+          for (const del of delar) {
+            if (!del.trim()) continue;
+            const h = JSON.parse(del) as Handelse;
+            allaRader.push(h);
+            if (h.typ === "klar") {
+              omgangKlar = true;
+              ticAnvant += h.tic_anrop;
+              ticCache += h.tic_fran_cache;
+              sokta = h.sokta || sokta;
+              continue;
+            }
+            setKorning((k) => {
+              if (!k) return k;
+              if (h.typ === "lead") return { ...k, index: start + h.index, totalt: leads.length, aktuellt: h.namn };
+              if (h.typ === "rader") return { ...k, rows: [...k.rows, ...h.rows] };
+              return { ...k, status: "fel", fel: (h as any).error };
+            });
+          }
+        }
+        // Avbröts strömmen utan "klar" (t.ex. tidsgräns) visas det som fel.
+        if (!omgangKlar) throw new Error("anslutningen bröts innan körningen var klar");
       }
+      setKorning((k) => (k && k.status === "kor" ? { ...k, status: "klar", index: leads.length, ticAnrop: ticAnvant, ticCache } : k));
       hamtaKvot();
-      // Avbröts strömmen utan "klar" (t.ex. tidsgräns) visas det som fel.
-      setKorning((k) => (k && k.status === "kor" ? { ...k, status: "fel", fel: "anslutningen bröts innan körningen var klar" } : k));
       // Granskningskön: leads som fick tvillingar är hanterade och tas bort ur kön.
       if (ko) {
         const medTvillingar = new Set(
