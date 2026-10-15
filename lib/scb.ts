@@ -96,9 +96,9 @@ export async function scbForetag(orgNr: string, nyckel: string): Promise<ScbFore
 
 // Alla aktiva bolag med en huvudbransch, i Sverige - eller bara i ett län.
 // Första hämtningen av en bransch (5 000 bolag per anrop, upp till ~20 s för
-// restauranger) sparas i 90 dagar i förkortad form, uppdelad per län, så att
+// restauranger) sparas i 180 dagar i förkortad form, uppdelad per län, så att
 // nästa bolag i samma bransch slipper hämta den igen.
-const BRANSCH_DAGAR = 90;
+const BRANSCH_DAGAR = 180;
 const BRANSCH_HELA_MAX = 6000; // större branscher sparas bara per län (Redis-värden < 1 MB)
 type Kort = [string, string, string, string, string | null, number, string | null];
 const tillKort = (f: ScbForetag): Kort => [f.orgNr, f.namn, f.kommunKod, f.lanKod, f.postOrt, f.anstKl, f.sni];
