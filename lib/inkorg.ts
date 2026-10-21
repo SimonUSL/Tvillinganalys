@@ -4,7 +4,7 @@
 // går vidare till tvillingsökningen; resten får en orsak.
 
 import { parseCsv } from "./csv";
-import { LeadKontext, SourceResult, kallbolagViaOrgNr, namnUtanBolagsform, resolveViaBolagsdata } from "./twinfinder";
+import { LeadKontext, SourceResult, Tic, kallbolagViaOrgNr, namnUtanBolagsform, resolveViaBolagsdata, resolveViaTic } from "./twinfinder";
 
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 
@@ -297,22 +297,81 @@ export function orgNrIText(text: string): string | null {
   return null;
 }
 
+// Webbadresser i meddelandet ("www.shinetime.se", "shinetime.se") -> "shinetime".
+// E-postadresser, sociala medier och vanliga tjänster räknas inte.
+const INTE_BOLAGSDOMAN = new Set([
+  "gmail", "hotmail", "outlook", "yahoo", "icloud", "live", "msn", "telia", "spray", "bredband", "comhem", "protonmail",
+  "facebook", "instagram", "linkedin", "google", "youtube", "tiktok", "twitter", "x", "wix", "webflow", "optimalkommunikation",
+]);
+export function domanerIText(text: string): string[] {
+  const ut: string[] = [];
+  for (const m of text.matchAll(/(?<![@\w.-])(?:https?:\/\/)?(?:www\.)?([a-zåäö0-9][a-zåäö0-9-]{1,62})\.(?:se|com|nu|net|org|eu|io|info|biz|co)(?![\w-])/gi)) {
+    const stam = m[1].toLowerCase();
+    if (!INTE_BOLAGSDOMAN.has(stam) && !ut.includes(stam)) ut.push(stam);
+  }
+  return ut;
+}
+
+// Lägsta säkerhet för ett bolag som bara hittats via en webbadress i meddelandet.
+const MIN_WEBB_SAKERHET = 0.85;
+
+// "klappen" -> ["kläppen", "klåppen"]: ett a eller o i taget byts mot å/ä/ö.
+function medPrickar(ord: string): string[] {
+  const ut: string[] = [];
+  [...ord].forEach((c, i) => {
+    const byten = c === "a" ? ["ä", "å"] : c === "o" ? ["ö"] : [];
+    for (const b of byten) ut.push(ord.slice(0, i) + b + ord.slice(i + 1));
+  });
+  return ut.slice(0, 6);
+}
+
 export async function identifyCompany(
   f: Forfragan,
   k: Klassning,
   bolagsdataKey: string | undefined,
-  typesafeKey: string | undefined
+  typesafeKey: string | undefined,
+  tic?: Tic // reserv: tic.io:s namnsökning när inget annat hittar bolaget (1 anrop)
 ): Promise<SourceResult & { sokterm: string }> {
-  // Ett organisationsnummer i meddelandet pekar ut bolaget direkt.
+  // 1. Ett organisationsnummer i meddelandet pekar ut bolaget direkt.
   const orgNr = orgNrIText(f.meddelande);
   if (orgNr) {
     const r = await kallbolagViaOrgNr(orgNr, bolagsdataKey, "org.nr i förfrågan");
     if (r.company) return { ...r, sokterm: orgNr };
   }
+  // 2. Bolagsnamnet i meddelandet, webbadresser i meddelandet, avsändarens e-postdomän.
   const kontext: LeadKontext = { message: utanPersonuppgifter(f.meddelande).slice(0, 800), email_domain: f.doman };
-  const sokterm = k.namnfras || (f.doman && !f.gratismejl ? f.doman.replace(/\.[a-z]+$/, "") : "");
-  if (!sokterm) return { company: null, matchning: "inget bolagsnamn i förfrågan – fyll i själv", sokterm };
-  if (!bolagsdataKey) return { company: null, matchning: "BOLAGSDATA_API_KEY saknas – fyll i själv", sokterm };
-  const r = await resolveViaBolagsdata(namnUtanBolagsform(sokterm), bolagsdataKey, typesafeKey, kontext);
-  return r.company ? { ...r, sokterm } : { ...r, matchning: `${r.matchning} – fyll i själv`, sokterm };
+  const epostdoman = f.doman && !f.gratismejl ? f.doman.replace(/\.[a-z]+$/, "") : null;
+  // Webbadresser saknar å/ä/ö ("klappen" för Kläppen): prova även med dem.
+  const webb = domanerIText(f.meddelande).flatMap((d) => [d, ...medPrickar(d)]);
+  const franWebb = new Set(webb);
+  const termer = [...new Set([k.namnfras, ...webb, epostdoman].filter(Boolean) as string[])];
+  if (!termer.length) return { company: null, matchning: "inget bolagsnamn i förfrågan – fyll i själv", sokterm: "" };
+  if (!bolagsdataKey) return { company: null, matchning: "BOLAGSDATA_API_KEY saknas – fyll i själv", sokterm: termer[0] };
+  let forsta: (SourceResult & { sokterm: string }) | null = null;
+  for (const term of termer) {
+    const r = await resolveViaBolagsdata(namnUtanBolagsform(term), bolagsdataKey, typesafeKey, kontext);
+    // Ett bolag som bara hittats via en webbadress (ingen namnlikhet att luta sig mot)
+    // kräver högre säkerhet; annars blir det ett förslag och sökningen fortsätter.
+    if (r.company && franWebb.has(term) && term !== k.namnfras && (r.sakerhet ?? 1) < MIN_WEBB_SAKERHET) {
+      forsta ??= { company: null, matchning: `osäker träff via webbadress (${r.matchning})`, forslag: { namn: r.company.name, org_nr: r.company.org_nr }, sokterm: term };
+      continue;
+    }
+    if (r.company) return { ...r, sokterm: term };
+    // Ett osäkert förslag ("Är det X?") är bättre än att leta vidare: det godtas med ett klick.
+    // Från en webbadress provas varianterna (å/ä/ö) innan förslaget godtas.
+    if (r.forslag && !franWebb.has(term)) return { ...r, matchning: `${r.matchning} – fyll i själv`, sokterm: term };
+    if (r.forslag && !forsta?.forslag) forsta = { ...r, sokterm: term };
+    forsta ??= { ...r, sokterm: term };
+  }
+  // 3. Sist tic.io:s namnsökning - där finns även nystartade bolag som bolagsdataapi saknar.
+  const ticTerm = k.namnfras || domanerIText(f.meddelande)[0];
+  if (tic && ticTerm) {
+    try {
+      const r = await resolveViaTic(ticTerm, tic, typesafeKey);
+      if (r.company) return { ...r, matchning: `${r.matchning} (tic.io)`, sokterm: ticTerm };
+    } catch {
+      // taket nått eller fel - då får en människa fylla i
+    }
+  }
+  return { ...forsta!, matchning: `${forsta!.matchning} – fyll i själv` };
 }

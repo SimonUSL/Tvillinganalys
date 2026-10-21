@@ -49,7 +49,8 @@ export async function hanteraLead(f: Forfragan, inskickId: string): Promise<{ ut
     const hoppa = skalAttHoppaOver(f, k);
     if (hoppa) return logg("hoppas_over", hoppa.text);
 
-    const r = await identifyCompany(f, k, bolagsdataKey, typesafeKey);
+    // tic.io:s namnsökning som sista utväg (högst 1 anrop) när registren inte hittar bolaget.
+    const r = await identifyCompany(f, k, bolagsdataKey, typesafeKey, ticKlient(ticKey, 1));
     const etikett = forfraganEtikett(k.typ, k.avsandare);
     if (!r.company) {
       const orsak: GranskaOrsak = r.forslag ? "osaker" : r.sokterm ? "ingen" : "inget_namn";

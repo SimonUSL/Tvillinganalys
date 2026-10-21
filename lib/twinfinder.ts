@@ -361,7 +361,7 @@ function applyTicSize(source: Company, ticSource: TicSource, doc: any): void {
   }
 }
 
-async function resolveViaTic(companyName: string, tic: Tic, typesafeKey?: string): Promise<SourceResult> {
+export async function resolveViaTic(companyName: string, tic: Tic, typesafeKey?: string): Promise<SourceResult> {
   const docs = await ticSearch(tic, {
     q: namnUtanBolagsform(companyName),
     query_by: "names.nameOrIdentifier",
