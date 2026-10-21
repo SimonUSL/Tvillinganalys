@@ -326,7 +326,7 @@ export async function resolveSourceCompany(
 ): Promise<SourceResult> {
   if (bolagsdataKey) {
     if (orgNr) {
-      const result = await bolagsdataDetails(normOrgNr(orgNr), bolagsdataKey, null, "angivet org.nr");
+      const result = await kallbolagViaOrgNr(orgNr, bolagsdataKey, "angivet org.nr");
       if (result.company) return result;
     } else {
       const result = await resolveViaBolagsdata(companyName, bolagsdataKey, typesafeKey);
@@ -455,6 +455,61 @@ const KONTEXT_DETALJER = 5;
 
 // Detaljanropet ger verksamhetsbeskrivning, län och SNI-koder. Storlek finns
 // bara i sökträffen (hit), så vid uppslag på org.nr saknas den.
+// SCB:s länskoder -> länsnamn som hos bolagsdataapi ("Västra Götaland").
+const LAN_NAMN: Record<string, string> = {
+  "01": "Stockholm", "03": "Uppsala", "04": "Södermanland", "05": "Östergötland", "06": "Jönköping", "07": "Kronoberg",
+  "08": "Kalmar", "09": "Gotland", "10": "Blekinge", "12": "Skåne", "13": "Halland", "14": "Västra Götaland",
+  "17": "Värmland", "18": "Örebro", "19": "Västmanland", "20": "Dalarna", "21": "Gävleborg", "22": "Västernorrland",
+  "23": "Jämtland", "24": "Västerbotten", "25": "Norrbotten",
+};
+
+// Källbolaget via organisationsnummer: bolagsdataapi i första hand, annars
+// Bolagsverket (namn, verksamhet, SNI) + SCB (län, ort, kontakt). Nystartade
+// bolag finns ofta hos Bolagsverket och SCB innan de kommer till bolagsdataapi.
+export async function kallbolagViaOrgNr(orgNr: string, bolagsdataKey: string | undefined, matchning: string): Promise<SourceResult> {
+  const nr = normOrgNr(orgNr);
+  if (bolagsdataKey) {
+    const r = await bolagsdataDetails(nr, bolagsdataKey, null, matchning);
+    if (r.company) return r;
+  }
+  const scbKey = process.env.SCB_API_KEY;
+  const [bv, scb] = await Promise.all([
+    bolagsverketPa() ? bvOrganisation(nr).catch(() => null) : Promise.resolve(null),
+    scbKey ? scbForetag(nr, scbKey) : Promise.resolve(null),
+  ]);
+  const namn = bv?.namn || scb?.namn;
+  if (!namn) return { company: null, matchning: `hittade inget bolag med org.nr ${orgNr}` };
+  const sni = bv?.sni.length ? bv.sni : scb?.sni ? [scb.sni] : [];
+  const company: Company = {
+    org_nr: nr,
+    name: namn,
+    net_revenue: null,
+    employees: null,
+    sni_codes: sni,
+    lan: scb?.lanKod ? LAN_NAMN[scb.lanKod] ?? null : null,
+    ort: scb?.postOrt ?? bv?.postort ?? null,
+    matchning,
+    kontakt: { beslutsfattare: null, epost: scb?.epost ?? null, telefon: scb?.telefon ?? null, webb: null },
+  };
+  const ticSource: TicSource = {
+    profile: {
+      name: namn,
+      business_description: (bv?.beskrivning || "").slice(0, 600) || null,
+      industry: [],
+      legal_form: null,
+      employees: null,
+      website: null,
+      municipality: company.ort ?? null,
+      owned_through: [],
+    },
+    sni2007: new Set(sni),
+    sni2025: new Set(),
+    county: company.lan ?? null,
+    countyCode: scb?.lanKod ? Number(scb.lanKod) : null,
+  };
+  return { company, matchning, ticSource };
+}
+
 // En kandidats verksamhetsbeskrivning: från Bolagsverket (ingen dygnskvot) om
 // nycklarna finns, annars från bolagsdataapi. Bolag som inte är verksamma hoppas över.
 async function kandidatDetaljer(orgNr: string, bolagsdataKey: string, hit: any): Promise<SourceResult> {

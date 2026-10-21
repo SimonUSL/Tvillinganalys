@@ -4,7 +4,7 @@
 // går vidare till tvillingsökningen; resten får en orsak.
 
 import { parseCsv } from "./csv";
-import { LeadKontext, SourceResult, namnUtanBolagsform, resolveViaBolagsdata } from "./twinfinder";
+import { LeadKontext, SourceResult, kallbolagViaOrgNr, namnUtanBolagsform, resolveViaBolagsdata } from "./twinfinder";
 
 const TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone";
 
@@ -280,12 +280,35 @@ export function skalAttHoppaOver(f: Forfragan, k: Klassning): HoppaOver | null {
 // Hitta avsändarens bolag via bolagsdataapi: söktermen är ett namn ur
 // meddelandet eller e-postdomänens stam. Inga tic.io-anrop. Är Jev osäker
 // lämnas fältet tomt i förhandsgranskningen och användaren fyller i själv.
+// Organisationsnummer i fri text ("org.nr 559606-2694"). Bara juridiska
+// personer: tredje siffran är minst 2 (personnummer har månad 01-12 där och
+// används aldrig). Kontrollsiffran ska stämma.
+export function orgNrIText(text: string): string | null {
+  for (const m of text.matchAll(/(?<!\d)(\d{6})[- ]?(\d{4})(?!\d)/g)) {
+    const nr = m[1] + m[2];
+    if (Number(nr[2]) < 2) continue;
+    let summa = 0;
+    for (let i = 0; i < 9; i++) {
+      const d = Number(nr[i]) * (i % 2 === 0 ? 2 : 1);
+      summa += Math.floor(d / 10) + (d % 10);
+    }
+    if ((10 - (summa % 10)) % 10 === Number(nr[9])) return nr;
+  }
+  return null;
+}
+
 export async function identifyCompany(
   f: Forfragan,
   k: Klassning,
   bolagsdataKey: string | undefined,
   typesafeKey: string | undefined
 ): Promise<SourceResult & { sokterm: string }> {
+  // Ett organisationsnummer i meddelandet pekar ut bolaget direkt.
+  const orgNr = orgNrIText(f.meddelande);
+  if (orgNr) {
+    const r = await kallbolagViaOrgNr(orgNr, bolagsdataKey, "org.nr i förfrågan");
+    if (r.company) return { ...r, sokterm: orgNr };
+  }
   const kontext: LeadKontext = { message: utanPersonuppgifter(f.meddelande).slice(0, 800), email_domain: f.doman };
   const sokterm = k.namnfras || (f.doman && !f.gratismejl ? f.doman.replace(/\.[a-z]+$/, "") : "");
   if (!sokterm) return { company: null, matchning: "inget bolagsnamn i förfrågan – fyll i själv", sokterm };
