@@ -1651,7 +1651,9 @@ export async function findTwins(
   const { kvar, borttagna } = await dropSameGroup(twins.slice(0, KONCERN_KONTROLL_ANTAL), koncernInfo, typesafeKey);
   koncernKlar();
   console.log(JSON.stringify({ steg: "koncernkontroll", kallbolag: source.name, borttagna }));
-  const slutliga = kvar.slice(0, MAX_TWINS_PER_LEAD);
+  // Säkerhetsspärr: ett org.nr med tredje siffran 0-1 är ett personnummer
+  // (enskild firma) och får aldrig visas, oavsett vilken källa tvillingen kom från.
+  const slutliga = kvar.filter((t) => Number(normOrgNr(t.org_nr)[2] ?? 9) >= 2).slice(0, MAX_TWINS_PER_LEAD);
   const detaljKlar = matt("tvillingdetaljer");
   if (bolagsdataKey) await fyllDetaljer(slutliga, bolagsdataKey);
   detaljKlar();
